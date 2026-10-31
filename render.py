@@ -620,6 +620,55 @@ def _when_local_and_display(moment, zone, zone_label):
     return f'{local} <small>{clock_time(shown)} {e(zone_label)}</small>'
 
 
+def _is_midnight(moment):
+    return moment.hour == 0 and moment.minute == 0 and moment.second == 0 and moment.microsecond == 0
+
+
+def _date_label(moment, zone, zone_label):
+    label = day_label(moment.date())
+    shown = moment.astimezone(zone)
+    if shown.utcoffset() != moment.utcoffset() and shown.date() != moment.date():
+        return f'{e(label)} <small>{e(day_label(shown.date()))} {e(zone_label)}</small>'
+    return e(label)
+
+
+def _moment_label(moment, zone, zone_label):
+    if _is_midnight(moment):
+        return _date_label(moment, zone, zone_label)
+    return _when_local_and_display(moment, zone, zone_label)
+
+
+def _travel_times(kind, start, end, zone, zone_label):
+    if start and end and start == end:
+        end = None
+    if kind == "hotel":
+        parts = []
+        if start:
+            parts.append("Check-in " + day_label(start.date()))
+        if end:
+            parts.append("Check-out " + day_label(end.date()))
+        return e(" · ".join(parts))
+    if not start:
+        return _moment_label(end, zone, zone_label) if end else ""
+    text = _moment_label(start, zone, zone_label)
+    if end:
+        text += " to " + _moment_label(end, zone, zone_label)
+    return text
+
+
+def friendly_day(iso, today):
+    text = str(iso or "")[:10]
+    try:
+        day = dt.date.fromisoformat(text)
+    except ValueError:
+        return text
+    if today and day == today:
+        return "Today"
+    if today and day == today + dt.timedelta(days=1):
+        return "Tomorrow"
+    return day_label(day)
+
+
 def _link_or_text(text, url):
     href = safe_href(url)
     label = e(text)
@@ -628,7 +677,7 @@ def _link_or_text(text, url):
     return f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{label}</a>'
 
 
-def weather_card(rows):
+def weather_card(rows, today=None):
     if not rows:
         return ""
     body = ""
@@ -652,7 +701,9 @@ def weather_card(rows):
                 span = f"{high}/{low} C"
             elif high is not None:
                 span = f"{high} C"
-            outlook.append(f'<li><b>{e(day.get("date") or "")}</b> {e(day.get("sky") or "")} {e(span)}</li>')
+            outlook.append(
+                f'<li><b>{e(friendly_day(day.get("date"), today))}</b> {e(day.get("sky") or "")} {e(span)}</li>'
+            )
         body += (
             f'<div class="wx"><h3 class="place">{e(row.get("name"))}</h3>'
             f'<p class="wxnow">{e(line)}</p>'
@@ -680,15 +731,11 @@ def travel_card(data, zone, zone_label, now):
     upcoming.sort(key=lambda item: item[0])
     if not upcoming:
         return ""
-    body = ""
-    for _sort, row, start, end in upcoming[:6]:
+
+    def one_trip(row, start, end):
         kind = row.get("kind") or "other"
         route = " to ".join(part for part in (clean_text(row.get("from")), clean_text(row.get("to"))) if part)
-        times = ""
-        if start:
-            times = _when_local_and_display(start, zone, zone_label)
-            if end:
-                times += " to " + _when_local_and_display(end, zone, zone_label)
+        times = _travel_times(kind, start, end, zone, zone_label)
         flags = []
         if start and start > now:
             flags.append(f'<span class="b soon">{e(_countdown(start, now))}</span>')
@@ -702,9 +749,13 @@ def travel_card(data, zone, zone_label, now):
         extra = ""
         if row.get("confirmation"):
             extra += f'<div class="nt">Confirmation {e(row.get("confirmation"))}</div>'
-        if row.get("details"):
-            extra += f'<div class="nt">{e(row.get("details"))}</div>'
-        body += (
+        details = clean_text(row.get("details") or "")
+        if details:
+            if " · " in str(row.get("details") or "") or len(details) > 80:
+                extra += f'<details class="fold"><summary>Details</summary><div class="nt">{e(details)}</div></details>'
+            else:
+                extra += f'<div class="nt">{e(details)}</div>'
+        return (
             f'<div class="trip"><div class="meta"><span class="tag">{e(kind)}</span>{"".join(flags)}</div>'
             f'<div class="ttl">{title}</div>'
             + (f'<div class="nt">{e(route)}</div>' if route else "")
@@ -712,7 +763,12 @@ def travel_card(data, zone, zone_label, now):
             + extra
             + "</div>"
         )
-    return f'<article class="card glance-card" id="next-up"><h2>Next up</h2>{body}</article>'
+
+    shown = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[:5])
+    hidden = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[5:])
+    if hidden:
+        shown += f'<details class="fold"><summary>Show all</summary>{hidden}</details>'
+    return f'<article class="card glance-card" id="next-up"><h2>Next up</h2>{shown}</article>'
 
 
 def today_meetings_card(data, zone, zone_label, now):
@@ -826,7 +882,7 @@ def glance_html(data, zone, zone_label, weather=None, now=None):
             weather_rows = [{"name": "", "unavailable": True}]
     cards = []
     if isinstance(places, list) and places:
-        cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}]))
+        cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}], now.astimezone(zone).date()))
     if isinstance(data, dict):
         cards.append(travel_card(data, zone, zone_label, now))
         cards.append(upgrades_card(data, zone))

@@ -667,6 +667,61 @@ class GlanceTests(unittest.TestCase):
         self.assertIn("Checked", html)
         self.assertNotIn("!", visible(html))
 
+    def test_hotel_dates_weather_days_and_show_all(self):
+        now = dt.datetime(2026, 10, 28, 12, tzinfo=dt.timezone.utc)
+        zone = dt.timezone.utc
+        data = self._base()
+        trips = [
+            {
+                "id": "H1", "kind": "hotel", "title": "Pier stay",
+                "start": "2026-10-29T00:00:00+07:00", "end": "2026-11-04T00:00:00+07:00",
+                "details": "Quiet room · Late checkout · High floor",
+            },
+            {
+                "id": "F0", "kind": "flight", "title": "Midnight hop",
+                "start": "2026-10-30T00:00:00Z", "end": "2026-10-30T05:00:00Z",
+            },
+            {
+                "id": "Fsame", "kind": "other", "title": "One moment",
+                "start": "2026-11-02T18:00:00Z", "end": "2026-11-02T18:00:00Z",
+            },
+        ]
+        for index in range(1, 5):
+            trips.append({
+                "id": f"Fx{index}", "kind": "flight", "title": f"Later hop {index}",
+                "start": f"2026-11-0{index + 2}T15:00:00Z", "end": f"2026-11-0{index + 2}T18:00:00Z",
+            })
+        data["travel"] = trips
+        html, _counts, _jarvis = render.render_main(
+            data, fresh_state(), zone=zone, zone_label="UTC", now=now,
+        )
+        self.assertIn("Check-in Thu Oct 29", html)
+        self.assertIn("Check-out Wed Nov 4", html)
+        self.assertIn("Fri Oct 30", html)
+        self.assertNotIn("12:00 AM", html)
+        before, after = html.split("Show all", 1)
+        self.assertIn("Pier stay", before)
+        self.assertIn("Later hop 2", before)
+        self.assertIn("Later hop 3", after)
+        self.assertNotIn("Later hop 3", before)
+        self.assertIn("<summary>Details</summary>", html)
+        self.assertIn("Quiet room", html)
+        same = html.split("One moment", 1)[1].split("</div>", 1)[0]
+        self.assertNotIn(" to ", same)
+        card = render.weather_card([{
+            "name": "Bangkok", "temp": 31, "sky": "Clear", "wind": 5,
+            "days": [
+                {"date": "2026-11-01", "high": 33, "low": 25, "sky": "Clear"},
+                {"date": "2026-11-02", "high": 32, "low": 24, "sky": "Rain"},
+                {"date": "2026-11-03", "high": 31, "low": 24, "sky": "Clouds"},
+            ],
+        }], today=dt.date(2026, 11, 1))
+        self.assertIn(">Today<", card)
+        self.assertIn(">Tomorrow<", card)
+        self.assertIn(">Tue Nov 3<", card)
+        self.assertNotIn("2026-11-01", card)
+        self.assertNotIn("!", visible(html + card))
+
     def test_weather_fallback_and_cache(self):
         import weather as weather_mod
         places = [{"name": "Bangkok", "lat": 13.75, "lon": 100.5}]
