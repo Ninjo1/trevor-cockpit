@@ -36,13 +36,13 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
-| `HOME_TZ` | Render dashboard | IANA zone for the first clock, marked as where you are. Example: `Asia/Bangkok` |
-| `HOME_LABEL` | Render dashboard, optional | Name on that clock. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
+| `HOME_TZ` | Render dashboard | Fallback IANA zone for the Here clock when the device zone is unknown and the payload has no location for today. Example: `Asia/Bangkok` |
+| `HOME_LABEL` | Render dashboard, optional | City name for that fallback. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
 | `DISPLAY_TZ` | Render dashboard | Zone for calendar times, which day an event falls on, due badges, and the refreshed line. If empty, `HOME_TZ` is used, then `America/Vancouver` |
 
 One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
 
-The board always shows four clocks: where you are (`HOME_TZ`), Vancouver, San Diego, and Amsterdam. The first one is the current place. If the browser's zone is different and is not already one of those clocks, the page adds it as "This device". `HOME_TZ` stays the source of truth for where you are. These three variables are already set on the running service. This repo does not change them.
+The board shows three slim clocks in one row: where you are, Vancouver, and Amsterdam. Where you are uses the device time zone and is marked Here. If the device zone is unknown, the page uses today's payload location when that place includes a time zone, then `HOME_TZ`. Vancouver is marked Home. Amsterdam is the third clock. San Diego is not shown. If where you are is already Vancouver or Amsterdam, that clock is marked Here and is not repeated. These three variables are already set on the running service. This repo does not change them.
 
 Local run:
 
@@ -135,13 +135,95 @@ Optional:
 | `numbers` | `[{label, value, sub, source}]` |
 | `notes` | list of strings, shown in the footer |
 | `sources` | `{connected: [...], needed: [...]}` |
-| `weather_places` | `[{name, lat, lon}]`. The server asks Open-Meteo for current conditions, today's high and low, and a 3-day outlook, in C and km/h. Cached about 30 minutes. A failed fetch shows "weather unavailable" and the rest of the page still loads. Omit the key to hide the card |
-| `travel` | `[{id, kind, title, start, end, from, to, confirmation, details, status, url}]`. `kind` is `flight`, `hotel`, `car`, `train`, or `other`. `start` and `end` are ISO 8601 with an offset. The Next up card lists items whose end has not passed, soonest first, in that item's own time plus `DISPLAY_TZ` when those differ. A flight departing within 24 hours is marked check-in open. `url` is the link |
+| `weather_places` | `[{name, lat, lon}]`. The server asks Open-Meteo for current conditions, today's high and low, and a 3-day outlook, in C and km/h. Outlook days read Today, Tomorrow, or a short date such as Sun Nov 1. Cached about 30 minutes. A failed fetch shows "weather unavailable" and the rest of the page still loads. Omit the key to hide the card |
+| `travel` | `[{id, kind, title, start, end, from, to, confirmation, details, status, url}]`. `kind` is `flight`, `hotel`, `car`, `train`, or `other`. `start` and `end` are ISO 8601 with an offset. Next up lists items whose end has not passed, soonest first, five at a time, with Show all for the rest. A midnight time is the date only. A hotel is Check-in and Check-out dates. The same start and end show once. Long details sit behind Details. Times use the item's own zone, plus `DISPLAY_TZ` when those differ. A flight departing within 24 hours is marked check-in open. `url` is the link |
 | `upgrades` | `[{flight, date, route, requested_cabin, status, position, checked_at, url}]`. A small card with status and when it was last checked. `url` is the link |
 
 Calendar events may also include `join_url` (Teams, Zoom, or Meet). Today's card lists meetings for today and the next 24 hours in `DISPLAY_TZ`, with a Join link when `join_url` or `join` is set, and the Vancouver time in small text. Omit any of these keys and that card stays hidden. A wrong type is rejected and the previous file is kept.
 
 The page does not show emoji or exclamation points. Those characters are stripped from visible text.
+
+## Full ingest example
+
+A scheduled job can post this shape. Omit a key to hide that card. `quadrant` may be `do_now`, `schedule`, `delegate`, or `delete`. If it is missing, an important item that is overdue or due within 48 hours lands in Do now, important later work in Schedule, someone else's urgent work in Delegate, and the rest in Delete or drop. Undated tasks stay collapsed inside their quadrant. Moving a task on the board stores `quadrant` in `state.json` and survives the next ingest.
+
+`waiting_on` is mail you sent or decisions other people owe you: `who`, `what`, `since` (`YYYY-MM-DD`), `channel` (`email`, `meeting`, or `slack`), `url`, and `id`. Rows older than 5 days are highlighted.
+
+`restaurant_locations` is a list of `{name, from, until, currency, eat, delivery}`. Optional `tz` is an IANA zone. The page shows the range that contains today. `from` and `until` are inclusive. Prices in THB or JPY also show an approximate CAD figure from the live rate. If this list is absent, the flat `restaurants` object is used. When the browser cannot read a device zone, a location for today that includes `tz` (or a top-level `location` object with `name` and `tz`) is the Here clock. Otherwise `HOME_TZ` is used.
+
+`jarvis.on_fire` and `jarvis.decision` are the two lines at the top. `jarvis.numbers` or `numbers` supplies up to five figures. Each number may set `status` to `red`, `amber`, or `green`.
+
+`generated_at` is the "Data as of" time. It turns amber after 12 hours and red after 24.
+
+There is no `build_cockpit_payload` script in this repo. The job that builds `data.json` should follow this example:
+
+```json
+{
+  "generated_at": "2026-10-31T18:00:00Z",
+  "schema": 3,
+  "fx": {"usdcad": 1.396, "as_of": "2026-10-30", "source": "Bank of Canada Valet"},
+  "jarvis": {
+    "on_fire": "One checklist is still open before the demo.",
+    "decision": "Approve the sample budget figure today.",
+    "numbers": [
+      {"label": "Open now", "value": "3", "status": "red", "sub": "Due inside 48 hours"},
+      {"label": "Waiting", "value": "2", "status": "amber"},
+      {"label": "Scheduled", "value": "4", "status": "green"}
+    ]
+  },
+  "items": [
+    {
+      "id": "S-1",
+      "area": "Echandia",
+      "kind": "task",
+      "section": "now",
+      "quadrant": "do_now",
+      "important": true,
+      "owner": "",
+      "due": "2026-10-31",
+      "priority": null,
+      "title": "Confirm the demo checklist",
+      "note": "",
+      "done": false,
+      "links": [{"label": "ClickUp", "href": "https://app.clickup.com/t/sample", "kind": "clickup"}]
+    }
+  ],
+  "waiting_on": [
+    {"id": "W-1", "who": "Demo Person", "what": "Reply on the date", "since": "2026-10-20", "channel": "email", "url": "https://outlook.office.com/mail/sample", "area": "Echandia"}
+  ],
+  "calendar": [
+    {"id": "cal-1", "subject": "Harbor check-in", "allDay": false, "start": "2026-10-31T17:00:00Z", "end": "2026-10-31T18:00:00Z", "join_url": "https://teams.microsoft.com/l/meetup-join/sample", "webLink": "https://outlook.office.com/calendar/item/sample", "note": "", "stale": false}
+  ],
+  "travel": [
+    {"id": "T-1", "kind": "flight", "title": "Sample flight", "start": "2026-11-03T09:30:00+07:00", "end": "2026-11-03T12:00:00+07:00", "from": "BKK", "to": "KIX", "confirmation": "ABC123", "details": "", "status": "confirmed", "url": "https://example.com/flight"}
+  ],
+  "upgrades": [
+    {"flight": "DL 100", "date": "2026-11-03", "route": "BKK-KIX", "requested_cabin": "First", "status": "Waitlisted", "position": "4", "checked_at": "2026-10-31T12:00:00Z", "url": "https://example.com/delta"}
+  ],
+  "weather_places": [
+    {"name": "Bangkok", "lat": 13.75, "lon": 100.5}
+  ],
+  "restaurant_locations": [
+    {"name": "Bangkok", "from": "2026-10-01", "until": "2026-11-06", "currency": "THB", "eat": [{"name": "Sample noodle", "area": "Sukhumvit", "cuisine": "Noodles", "price": "120", "why": "Near the hotel.", "map_url": "https://example.com/noodle"}], "delivery": []},
+    {"name": "Osaka", "from": "2026-11-07", "until": "2026-11-10", "currency": "JPY", "eat": [{"name": "Sample counter", "area": "Namba", "cuisine": "Grill", "price": "2000", "why": "One seat at the counter.", "map_url": "https://example.com/osaka"}], "delivery": []}
+  ],
+  "restaurants": {"city": "Sample Harbor", "as_of": "2026-10-30", "eat": [], "delivery": []},
+  "money": [
+    {"id": "M-1", "who": "Sample Labs", "direction": "owed_to_me", "amount": "100.00", "currency": "USD", "area": "Echandia", "due": "2026-11-15", "note": "Sample invoice.", "href": "https://example.com/invoice"}
+  ],
+  "numbers": [
+    {"label": "Sample figure", "value": "1 of 1", "status": "green", "sub": "Not a real metric.", "source": "sample"}
+  ],
+  "principles": {
+    "musk": {"title": "Musk 5-step algorithm", "bottleneck": "One checklist.", "steps": [["Question the requirement", "Does this need a meeting?"], ["Delete", "Drop the duplicate."], ["Simplify", "One list."], ["Accelerate", "Send it today."], ["Automate", "Let the morning push refresh the board."]]},
+    "robbins": {"title": "Robbins RPM", "rpm_result": "Checklist closed.", "rpm_purpose": "A clean day.", "rpm_plan": ["Read it.", "Tick it."], "standards": ["One owner per item."], "pain": "An open loop.", "pleasure": "A short list.", "morning": ["What is the result?"], "evening": ["What did I finish?"], "values": ["Clarity"], "kaizen": "One less open loop."}
+  },
+  "notes": ["Sample data."],
+  "sources": {"connected": ["Sample file"], "needed": []}
+}
+```
+
+If `principles` is omitted, the page uses a built-in Musk 5-step list and a short Robbins block. The Delete candidates link jumps to the Delete or drop quadrant.
 
 A minimal restaurants object, if the morning file does not have one yet:
 

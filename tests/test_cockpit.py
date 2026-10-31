@@ -443,7 +443,7 @@ class AtomicTests(unittest.TestCase):
 class PageTests(unittest.TestCase):
     def test_render_has_sections_and_flight_clash(self):
         data = json.load(open(SAMPLE, encoding="utf-8"))
-        html, _counts = render.render_main(data, fresh_state(), today=dt.date(2026, 10, 30))
+        html, _counts, _jarvis = render.render_main(data, fresh_state(), today=dt.date(2026, 10, 30))
         for needle in (
             "North Pier Cafe",
             "Harbor Bowl",
@@ -475,15 +475,20 @@ class PageTests(unittest.TestCase):
         self.assertIn("bankofcanada.ca", template)
         moment = dt.datetime(2026, 10, 30, 18, 0, tzinfo=dt.timezone.utc)
         clocks = render.clocks_html(moment, env={"HOME_TZ": "Asia/Bangkok", "HOME_LABEL": "Bangkok"})
-        for city in ("Chicago", "New York", "Netherlands", "Sweden", "Seoul", "Tokyo"):
+        for city in ("Chicago", "New York", "Netherlands", "Sweden", "Seoul", "Tokyo", "San Diego", "UTC"):
             self.assertNotIn(city, clocks)
         self.assertLess(clocks.find(">Bangkok<"), clocks.find(">Vancouver<"))
-        self.assertLess(clocks.find(">Vancouver<"), clocks.find(">San Diego<"))
-        self.assertLess(clocks.find(">San Diego<"), clocks.find(">Amsterdam<"))
+        self.assertLess(clocks.find(">Vancouver<"), clocks.find(">Amsterdam<"))
         self.assertIn("clk current", clocks)
-        self.assertEqual(clocks.count("data-tz="), 4)
+        self.assertIn(">Here<", clocks)
+        self.assertIn(">Home<", clocks)
+        self.assertEqual(clocks.count("data-tz="), 3)
         self.assertIn('data-tz="Asia/Bangkok"', clocks)
-        self.assertIn('data-tz="America/Los_Angeles"', clocks)
+        self.assertNotIn("America/Los_Angeles", clocks)
+        self.assertNotIn("Clocks show the time this page was built", template)
+        self.assertIn("<!--PRE_JARVIS-->", template)
+        self.assertLess(template.find("<!--PRE_JARVIS-->"), template.find("<!--PRE_FX-->"))
+        self.assertLess(template.find("<!--PRE_FX-->"), template.find('id="clocks"'))
         self.assertIn("credentials: \"same-origin\"", template)
         self.assertIn("location.assign", template)
         self.assertIn("form.submit", template)
@@ -509,8 +514,23 @@ class PageTests(unittest.TestCase):
         home_label, home_key = render.home_clock({"HOME_TZ": "America/Argentina/Buenos_Aires"})
         self.assertEqual(home_label, "Buenos Aires")
         home_rows = render.clock_rows({})
-        self.assertEqual([row[1] for row in home_rows].count("America/Vancouver"), 1)
+        self.assertEqual([row[1] for row in home_rows], ["America/Vancouver", "Europe/Amsterdam"])
+        self.assertEqual(home_rows[0][2], "Here")
         self.assertTrue(home_rows[0][3])
+        vancouver_rows = render.clock_rows({"HOME_TZ": "America/Vancouver"})
+        self.assertEqual([row[1] for row in vancouver_rows], ["America/Vancouver", "Europe/Amsterdam"])
+        self.assertEqual(vancouver_rows[0][2], "Here")
+        amsterdam_rows = render.clock_rows({"HOME_TZ": "Europe/Amsterdam", "HOME_LABEL": "Amsterdam"})
+        self.assertEqual([row[1] for row in amsterdam_rows], ["Europe/Amsterdam", "America/Vancouver"])
+        self.assertEqual(amsterdam_rows[0][2], "Here")
+        self.assertEqual(amsterdam_rows[1][2], "Home")
+        osaka = {"restaurant_locations": [
+            {"name": "Osaka", "from": "2026-11-07", "until": "2026-11-10", "tz": "Asia/Tokyo", "currency": "JPY", "eat": [], "delivery": []},
+        ]}
+        osaka_rows = render.clock_rows({"HOME_TZ": "Asia/Bangkok"}, osaka, dt.date(2026, 11, 8))
+        self.assertEqual(osaka_rows[0][0], "Osaka")
+        self.assertEqual(osaka_rows[0][1], "Asia/Tokyo")
+        self.assertEqual([row[1] for row in osaka_rows], ["Asia/Tokyo", "America/Vancouver", "Europe/Amsterdam"])
         data = {
             "generated_at": "2026-10-30T17:00:00Z",
             "items": [],
@@ -524,7 +544,7 @@ class PageTests(unittest.TestCase):
             }],
             "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
         }
-        bangkok, _counts = render.render_main(
+        bangkok, _counts, _jarvis = render.render_main(
             data, fresh_state(), today=dt.date(2026, 10, 30),
             zone=ZoneInfo("Asia/Bangkok"), zone_label="Bangkok",
         )
@@ -532,7 +552,7 @@ class PageTests(unittest.TestCase):
         self.assertIn("12:00 AM", bangkok)
         self.assertNotIn("Pacific", bangkok)
         self.assertNotIn("Zone check meeting", bangkok.split("Tomorrow, Sat Oct 31")[0])
-        vancouver, _counts = render.render_main(
+        vancouver, _counts, _jarvis = render.render_main(
             data, fresh_state(), today=dt.date(2026, 10, 30),
             zone=ZoneInfo("America/Vancouver"), zone_label="Vancouver",
         )
@@ -559,7 +579,7 @@ class GlanceTests(unittest.TestCase):
         return {"items": [{"id": "S-1", "title": "Keep this task", "area": "Personal", "kind": "task", "section": "now", "due": "", "done": False, "links": []}], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
 
     def test_missing_keys_hide_the_cards(self):
-        html, _counts = render.render_main(self._base(), fresh_state(), now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc))
+        html, _counts, _jarvis = render.render_main(self._base(), fresh_state(), now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc))
         self.assertNotIn('id="weather"', html)
         self.assertNotIn('id="next-up"', html)
         self.assertNotIn('id="today-meet"', html)
@@ -630,7 +650,7 @@ class GlanceTests(unittest.TestCase):
             "requested_cabin": "Delta One", "status": "Waitlisted", "position": 4,
             "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/delta",
         }]
-        html, _counts = render.render_main(
+        html, _counts, _jarvis = render.render_main(
             data, fresh_state(), zone=ZoneInfo("America/Vancouver"), zone_label="Vancouver", now=now,
         )
         self.assertIn("Sample hop", html)
@@ -647,6 +667,61 @@ class GlanceTests(unittest.TestCase):
         self.assertIn("Checked", html)
         self.assertNotIn("!", visible(html))
 
+    def test_hotel_dates_weather_days_and_show_all(self):
+        now = dt.datetime(2026, 10, 28, 12, tzinfo=dt.timezone.utc)
+        zone = dt.timezone.utc
+        data = self._base()
+        trips = [
+            {
+                "id": "H1", "kind": "hotel", "title": "Pier stay",
+                "start": "2026-10-29T00:00:00+07:00", "end": "2026-11-04T00:00:00+07:00",
+                "details": "Quiet room · Late checkout · High floor",
+            },
+            {
+                "id": "F0", "kind": "flight", "title": "Midnight hop",
+                "start": "2026-10-30T00:00:00Z", "end": "2026-10-30T05:00:00Z",
+            },
+            {
+                "id": "Fsame", "kind": "other", "title": "One moment",
+                "start": "2026-11-02T18:00:00Z", "end": "2026-11-02T18:00:00Z",
+            },
+        ]
+        for index in range(1, 5):
+            trips.append({
+                "id": f"Fx{index}", "kind": "flight", "title": f"Later hop {index}",
+                "start": f"2026-11-0{index + 2}T15:00:00Z", "end": f"2026-11-0{index + 2}T18:00:00Z",
+            })
+        data["travel"] = trips
+        html, _counts, _jarvis = render.render_main(
+            data, fresh_state(), zone=zone, zone_label="UTC", now=now,
+        )
+        self.assertIn("Check-in Thu Oct 29", html)
+        self.assertIn("Check-out Wed Nov 4", html)
+        self.assertIn("Fri Oct 30", html)
+        self.assertNotIn("12:00 AM", html)
+        before, after = html.split("Show all", 1)
+        self.assertIn("Pier stay", before)
+        self.assertIn("Later hop 2", before)
+        self.assertIn("Later hop 3", after)
+        self.assertNotIn("Later hop 3", before)
+        self.assertIn("<summary>Details</summary>", html)
+        self.assertIn("Quiet room", html)
+        same = html.split("One moment", 1)[1].split("</div>", 1)[0]
+        self.assertNotIn(" to ", same)
+        card = render.weather_card([{
+            "name": "Bangkok", "temp": 31, "sky": "Clear", "wind": 5,
+            "days": [
+                {"date": "2026-11-01", "high": 33, "low": 25, "sky": "Clear"},
+                {"date": "2026-11-02", "high": 32, "low": 24, "sky": "Rain"},
+                {"date": "2026-11-03", "high": 31, "low": 24, "sky": "Clouds"},
+            ],
+        }], today=dt.date(2026, 11, 1))
+        self.assertIn(">Today<", card)
+        self.assertIn(">Tomorrow<", card)
+        self.assertIn(">Tue Nov 3<", card)
+        self.assertNotIn("2026-11-01", card)
+        self.assertNotIn("!", visible(html + card))
+
     def test_weather_fallback_and_cache(self):
         import weather as weather_mod
         places = [{"name": "Bangkok", "lat": 13.75, "lon": 100.5}]
@@ -662,7 +737,7 @@ class GlanceTests(unittest.TestCase):
         self.assertTrue(rows[0]["unavailable"])
         data = self._base()
         data["weather_places"] = places
-        html, _counts = render.render_main(
+        html, _counts, _jarvis = render.render_main(
             data, fresh_state(), weather=rows, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
         )
         self.assertIn("weather unavailable", html)
@@ -694,12 +769,127 @@ class GlanceTests(unittest.TestCase):
         clock["t"] += weather_mod.CACHE_SECONDS + 5
         weather_mod.get_forecasts(places, fetcher=ok, clock=lambda: clock["t"], cache=cache)
         self.assertEqual(len(calls), 2)
-        shown, _counts = render.render_main(
+        shown, _counts, _jarvis = render.render_main(
             data, fresh_state(), weather=first, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
         )
         self.assertIn("31 C", shown)
         self.assertIn("km/h", shown)
         self.assertNotIn("!", visible(shown))
+
+
+class RedesignTests(unittest.TestCase):
+    def test_quadrant_defaults_and_persisted_move(self):
+        today = dt.date(2026, 10, 31)
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-10-30", "important": True, "kind": "task",
+        }, today), "do_now")
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-12-01", "important": True, "kind": "task",
+        }, today), "schedule")
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-10-30", "owner": "Ada", "kind": "task",
+        }, today), "delegate")
+        self.assertEqual(render.derive_quadrant({
+            "section": "watch", "due": "", "priority": "low", "kind": "task",
+        }, today), "delete")
+        from actions import apply
+        state = fresh_state()
+        apply(state, "todo/quadrant", {"id": "S-open-1", "quadrant": "delete"}, "2026-10-31T00:00:00Z")
+        data = json.load(open(SAMPLE, encoding="utf-8"))
+        html, _counts, _jarvis = render.render_main(data, state, today=today, now=dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc))
+        chunk = html.split('id="quadrant-delete"')[1].split('id="quadrant-')[0]
+        self.assertIn("weekly note", chunk)
+
+    def test_clone_filter_and_note_and_freshness(self):
+        events = [
+            {"id": "a", "subject": "Real call", "start": "2026-11-01T17:00:00Z", "end": "2026-11-01T18:00:00Z"},
+            {"id": "b", "subject": "Real call (Clone)", "start": "2026-11-01T17:00:00Z", "end": "2026-11-01T18:00:00Z", "note": "Starts 10:00 AM Bangkok"},
+        ]
+        kept = render.drop_clones(events)
+        self.assertEqual([row["id"] for row in kept], ["a"])
+        self.assertEqual(render.tidy_note("Starts 10:00 AM Bangkok", "Bangkok"), "Starts")
+        generated = dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)
+        now = dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc)
+        self.assertEqual(render.freshness_class(generated, now), "stale-red")
+        self.assertEqual(render.freshness_class(now - dt.timedelta(hours=13), now), "stale-amber")
+        self.assertEqual(render.freshness_class(now - dt.timedelta(hours=2), now), "")
+
+    def test_restaurant_location_and_waiting_and_defaults(self):
+        today = dt.date(2026, 11, 7)
+        data = {
+            "items": [],
+            "calendar": [],
+            "restaurants": {"city": "Sample Harbor", "as_of": "", "eat": [{"name": "North Pier Cafe", "area": "Pier", "cuisine": "Soup", "price": "20 CAD", "why": "Fallback.", "map_url": "https://example.com/a"}], "delivery": []},
+            "restaurant_locations": [
+                {"name": "Bangkok", "from": "2026-10-01", "until": "2026-11-07", "currency": "THB", "eat": [{"name": "Old stop", "area": "Pier", "cuisine": "Noodles", "price": "100", "why": "Last day.", "map_url": "https://example.com/b"}], "delivery": []},
+                {"name": "Osaka", "from": "2026-11-07", "until": "2026-11-10", "currency": "JPY", "eat": [{"name": "Counter seat", "area": "Namba", "cuisine": "Grill", "price": "2000", "why": "New city.", "map_url": "https://example.com/c"}], "delivery": []},
+            ],
+            "waiting_on": [
+                {"id": "W-1", "who": "Demo Person", "what": "Sign the sample note", "since": "2026-10-01", "channel": "email", "url": "https://example.com/mail"},
+            ],
+        }
+        rates = {"cad_per": {"JPY": 0.01, "CAD": 1}}
+        html, _counts, _jarvis = render.render_main(data, fresh_state(), today=today, rates=rates, now=dt.datetime(2026, 11, 7, tzinfo=dt.timezone.utc))
+        self.assertIn("Counter seat", html)
+        self.assertNotIn("Old stop", html)
+        self.assertIn("about 20 CAD", html)
+        self.assertIn("wait hot", html)
+        self.assertIn("Sign the sample note", html)
+        bare = {"items": [], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
+        plain, _counts, _jarvis = render.render_main(bare, fresh_state())
+        self.assertIn("Question the requirement", plain)
+        self.assertIn("Delete candidates", plain)
+
+    def test_layout_order_fx_line_and_empty_quadrants(self):
+        today = dt.date(2026, 10, 31)
+        data = json.load(open(SAMPLE, encoding="utf-8"))
+        html, _counts, jarvis = render.render_main(
+            data, fresh_state(), today=today, now=dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc),
+        )
+        self.assertLess(html.find('id="quadrant-do_now"'), html.find('id="waiting-on"'))
+        self.assertLess(html.find('id="waiting-on"'), html.find('id="quadrant-schedule"'))
+        self.assertLess(html.find('id="quadrant-schedule"'), html.find('id="quadrant-delegate"'))
+        self.assertLess(html.find('id="quadrant-delegate"'), html.find('id="quadrant-delete"'))
+        self.assertLess(html.find('id="quadrant-delete"'), html.find('id="calendar"'))
+        self.assertLess(html.find('id="calendar"'), html.find('id="restaurants"'))
+        self.assertLess(html.find('id="restaurants"'), html.find('id="emails"'))
+        self.assertIn("Today's calendar", html)
+        self.assertNotIn('id="jarvis"', html)
+        self.assertIn('id="jarvis"', jarvis)
+        self.assertIn('class="home-top"', html)
+        bare = {
+            "items": [],
+            "calendar": [],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+        plain, _counts, _jarvis = render.render_main(bare, fresh_state(), today=today)
+        self.assertIn('class="quad-line" id="quadrant-schedule"', plain)
+        self.assertIn("Schedule: nothing.", plain)
+        self.assertIn("Waiting on: nothing.", plain)
+        self.assertNotIn('class="quad q-schedule"', plain)
+        rates = {
+            "cad_per": {"CAD": 1, "USD": 1.396, "THB": 0.04135, "JPY": 0.00887},
+            "usd_per": {"CAD": 1},
+            "source": "Bank of Canada Valet",
+            "date": "2026-10-30",
+        }
+        fx = render.fx_html(data, rates)
+        self.assertIn("USD to CAD", fx)
+        self.assertIn("THB to CAD", fx)
+        self.assertIn("JPY to CAD", fx)
+        self.assertIn("0.04135", fx)
+        self.assertIn("0.00887", fx)
+        self.assertNotIn("!", visible(plain + fx + jarvis))
+
+    def test_fx_pairs_from_valet_shape(self):
+        import fxrates
+        payload = {"observations": [{"d": "2026-10-30", "FXUSDCAD": {"v": "1.3960"}, "FXTHBCAD": {"v": "0.04135"}, "FXJPYCAD": {"v": "0.008870"}}]}
+        rates = fxrates._from_valet(payload)
+        rates["usd_per"] = fxrates.usd_per(rates["cad_per"])
+        self.assertAlmostEqual(rates["cad_per"]["THB"], 0.04135)
+        self.assertAlmostEqual(rates["usd_per"]["THB"], 0.04135 / 1.3960, places=6)
+        self.assertAlmostEqual(rates["usd_per"]["JPY"], 0.008870 / 1.3960, places=6)
+        self.assertEqual(rates["source"], "Bank of Canada Valet")
 
 
 if __name__ == "__main__":
