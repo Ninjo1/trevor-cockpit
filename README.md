@@ -11,11 +11,17 @@ The page is a small Python 3 program from the standard library. Render serves it
 1. Merge this repo to the branch Render should track.
 2. In the Render dashboard choose **New > Blueprint**.
 3. Select this repository. Render reads `render.yaml`.
-4. When asked, set **BASIC_AUTH_PASS** and **INGEST_TOKEN**. Leave them out of git. `BASIC_AUTH_USER` is already `trevor`. `DATA_DIR` is already `/var/data`.
+4. When asked, set **INGEST_TOKEN** and **BASIC_AUTH_PASS_SHA256**. Leave them out of git. `BASIC_AUTH_USER` is already `trevor`. `DATA_DIR` is already `/var/data`. `BASIC_AUTH_PASS` can stay empty.
 5. Apply the Blueprint. The service is named `trevor-cockpit`, on the starter plan, with a 1 GB disk mounted at `/var/data`. The health check is `/healthz`.
-6. Open the service URL and sign in as `trevor` with the password you set.
+6. Open the service URL and sign in as `trevor` with the password whose hash you set.
 
-The process listens on `$PORT`. If `BASIC_AUTH_PASS` is missing, every route including `/healthz` returns 503 and the deploy stays unhealthy. If `INGEST_TOKEN` is missing, `POST /api/ingest` returns 503.
+The process listens on `$PORT`. If neither `BASIC_AUTH_PASS` nor `BASIC_AUTH_PASS_SHA256` is set, every route including `/healthz` returns 503 and the deploy stays unhealthy. If `INGEST_TOKEN` is missing, `POST /api/ingest` returns 503.
+
+`BASIC_AUTH_PASS_SHA256` is the lowercase hex SHA-256 of the UTF-8 password. When it is set, that hash is the Basic auth check and `BASIC_AUTH_PASS` is optional. If both are set, the hash wins and the plaintext value is ignored. Compute it without a trailing newline:
+
+```sh
+printf '%s' 'the password' | sha256sum | cut -d' ' -f1
+```
 
 Sign out with `/logout`. The browser asks for the password again.
 
@@ -26,14 +32,17 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | Variable | Where it is set | Purpose |
 | --- | --- | --- |
 | `BASIC_AUTH_USER` | Blueprint, value `trevor` | Sign-in name |
-| `BASIC_AUTH_PASS` | Render dashboard, secret | Sign-in password. Required or the app refuses to serve |
+| `BASIC_AUTH_PASS_SHA256` | Render dashboard, secret | Lowercase hex SHA-256 of the sign-in password. Preferred. When set, Basic auth checks this hash |
+| `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
+
+One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
 
 Local run:
 
 ```sh
-export BASIC_AUTH_PASS='choose-a-password'
+export BASIC_AUTH_PASS_SHA256="$(printf '%s' 'choose-a-password' | sha256sum | cut -d' ' -f1)"
 export INGEST_TOKEN='choose-a-long-token'
 export DATA_DIR="$PWD/var/data"
 python3 server.py
@@ -134,7 +143,7 @@ A minimal restaurants object, if the morning file does not have one yet:
 
 | Method | Path | Auth | Effect |
 | --- | --- | --- | --- |
-| GET | `/healthz` | none | `{"ok": true}` when the password is set and the data directory is writable |
+| GET | `/healthz` | none | `{"ok": true}` when a password or password hash is set and the data directory is writable |
 | GET | `/` | Basic | The board. Works with JavaScript off |
 | GET | `/api/fragment?area=` | Basic | HTML fragment used by the page script |
 | GET | `/api/data` | Basic | Current data plus state |

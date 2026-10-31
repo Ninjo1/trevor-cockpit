@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Cockpit web server. Standard library only. Binds to $PORT.
 
-Auth: HTTP Basic on every path except /healthz. Fails closed when
-BASIC_AUTH_PASS is unset. POST /api/ingest uses Authorization: Bearer
-$INGEST_TOKEN. GET /api/state accepts that bearer or Basic.
+Auth: HTTP Basic on every path except /healthz. Fails closed when neither
+BASIC_AUTH_PASS nor BASIC_AUTH_PASS_SHA256 is set. When the hash is set,
+it is the password check (SHA-256 hex of the UTF-8 password) and
+BASIC_AUTH_PASS is optional. POST /api/ingest uses Authorization: Bearer
+$INGEST_TOKEN. GET /api/state accepts that bearer or the same Basic check.
 
 Ticks live in $DATA_DIR/state.json and are never written by ingest.
 """
@@ -102,8 +104,16 @@ def make_handler(config):
                 body = "Authentication required"
             self._send(401, body, "text/plain; charset=utf-8", extra)
 
+        def _basic_ok(self):
+            return basic_ok(
+                self.headers.get("Authorization"),
+                self.cfg.user,
+                self.cfg.password,
+                self.cfg.password_sha256,
+            )
+
         def _basic(self):
-            if basic_ok(self.headers.get("Authorization"), self.cfg.user, self.cfg.password):
+            if self._basic_ok():
                 return True
             self._unauthorized("Basic")
             return False
@@ -119,7 +129,7 @@ def make_handler(config):
             return False
 
         def _health(self):
-            if not self.cfg.password:
+            if not self.cfg.configured():
                 self._unconfigured()
                 return
             if not data_dir_writable(self.cfg):
@@ -160,9 +170,7 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
 
         def _state(self):
             header = self.headers.get("Authorization")
-            allowed = bearer_ok(header, self.cfg.ingest_token) or basic_ok(
-                header, self.cfg.user, self.cfg.password
-            )
+            allowed = bearer_ok(header, self.cfg.ingest_token) or self._basic_ok()
             if not allowed:
                 self._unauthorized("Bearer" if (header or "").lower().startswith("bearer ") else "Basic")
                 return
@@ -355,7 +363,7 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
         do_PATCH = do_PUT
 
         def _route(self, write):
-            if not self.cfg.password:
+            if not self.cfg.configured():
                 self._unconfigured()
                 return
             path = self._path()
