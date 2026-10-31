@@ -1,5 +1,6 @@
 # Render Blueprint for the private Cockpit.
-# New > Blueprint, select this repo, then set BASIC_AUTH_PASS and INGEST_TOKEN.
+# New > Blueprint, select this repo, then set INGEST_TOKEN and either
+# BASIC_AUTH_PASS_SHA256 (preferred) or BASIC_AUTH_PASS.
 services:
   - type: web
     name: trevor-cockpit
@@ -16,6 +17,8 @@ services:
       - key: BASIC_AUTH_USER
         value: trevor
       - key: BASIC_AUTH_PASS
+        sync: false
+      - key: BASIC_AUTH_PASS_SHA256
         sync: false
       - key: INGEST_TOKEN
         sync: false

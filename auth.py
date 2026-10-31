@@ -1,4 +1,9 @@
-"""HTTP Basic and Bearer checks. Comparisons are constant-time and fail closed."""
+"""HTTP Basic and Bearer checks. Comparisons are constant-time and fail closed.
+
+Basic auth checks BASIC_AUTH_PASS_SHA256 when that value is set: the
+lowercase hex SHA-256 of the UTF-8 password. BASIC_AUTH_PASS is then
+optional. If both are set, the hash is the check that must succeed.
+"""
 import base64
 import hashlib
 import hmac
@@ -20,12 +25,16 @@ def const_eq(left, right):
     )
 
 
-def basic_ok(header, user, password):
+def basic_ok(header, user, password="", password_sha256=""):
     """Return True only when header carries the expected user and password.
 
     An empty password never succeeds, even if the client sends an empty one.
     A malformed header still runs the comparison so the failure path does not
     return early on a parse error alone.
+
+    password_sha256, when non-empty, is the lowercase hex SHA-256 of the
+    UTF-8 password. It replaces the plaintext check. The presented password
+    is hashed and compared in constant time. The plaintext is not consulted.
     """
     presented_user = b""
     presented_password = b""
@@ -38,6 +47,10 @@ def basic_ok(header, user, password):
         if b":" in raw:
             presented_user, presented_password = raw.split(b":", 1)
     user_match = const_eq(presented_user, (user or "").encode("utf-8"))
+    expected_hash = (password_sha256 or "").strip().lower()
+    if expected_hash:
+        digest = hashlib.sha256(presented_password).hexdigest()
+        return user_match and const_eq(digest.encode("ascii"), expected_hash.encode("ascii"))
     password_match = const_eq(presented_password, (password or "").encode("utf-8"))
     if not password:
         return False

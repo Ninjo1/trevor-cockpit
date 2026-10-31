@@ -16,12 +16,17 @@ class StateError(Exception):
 
 
 class Config:
-    def __init__(self, data_dir, password, user="trevor", ingest_token="", sample_path=None):
+    def __init__(self, data_dir, password, user="trevor", ingest_token="", sample_path=None, password_sha256=""):
         self.data_dir = data_dir
         self.password = password if (password or "").strip() else ""
+        self.password_sha256 = (password_sha256 or "").strip().lower()
         self.user = (user or "trevor").strip() or "trevor"
         self.ingest_token = ingest_token if (ingest_token or "").strip() else ""
         self.sample_path = sample_path
+
+    def configured(self):
+        """True when Basic auth has a plaintext password or a password hash."""
+        return bool(self.password or self.password_sha256)
 
     @classmethod
     def from_env(cls, root=None):
@@ -32,6 +37,7 @@ class Config:
             user=os.environ.get("BASIC_AUTH_USER") or "trevor",
             ingest_token=os.environ.get("INGEST_TOKEN") or "",
             sample_path=os.environ.get("SAMPLE_DATA") or os.path.join(root, "sample", "data.json"),
+            password_sha256=os.environ.get("BASIC_AUTH_PASS_SHA256") or "",
         )
 
 

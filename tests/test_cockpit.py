@@ -1,6 +1,7 @@
 """Auth, ingest, tick survival, and atomic writes for the cockpit server."""
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -146,6 +147,97 @@ class AuthTests(HttpCase):
         self.assertEqual(status, 401)
         self.assertIn(b"Signed out", body)
         self.assertIn("Basic", headers.get("www-authenticate", ""))
+
+    def test_sha256_password_check_is_constant_time_and_hash_wins(self):
+        digest = hashlib.sha256("hash-secret".encode("utf-8")).hexdigest()
+        good = "Basic " + base64.b64encode(b"trevor:hash-secret").decode()
+        plain = "Basic " + base64.b64encode(b"trevor:plain-secret").decode()
+        wrong_user = "Basic " + base64.b64encode(b"other:hash-secret").decode()
+        self.assertTrue(basic_ok(good, "trevor", "", digest))
+        self.assertTrue(basic_ok(good, "trevor", "plain-secret", digest.upper()))
+        self.assertFalse(basic_ok(plain, "trevor", "plain-secret", digest))
+        self.assertFalse(basic_ok(wrong_user, "trevor", "", digest))
+        self.assertFalse(basic_ok(None, "trevor", "plain-secret", digest))
+        self.assertFalse(basic_ok(good, "trevor", "", "not-a-hash"))
+
+
+def _serve(cfg):
+    httpd = Server(("127.0.0.1", 0), make_handler(cfg))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd
+
+
+class HashAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.digest = hashlib.sha256(b"hash-secret").hexdigest()
+        self.cfg = Config(
+            data_dir=self.tmp.name,
+            password="plain-secret",
+            user="trevor",
+            ingest_token="test-token",
+            sample_path=SAMPLE,
+            password_sha256=self.digest,
+        )
+        self.httpd = _serve(self.cfg)
+        self.port = self.httpd.server_address[1]
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.tmp.cleanup()
+
+    def _open(self, path, auth=None, method="GET"):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method)
+        if auth:
+            req.add_header("Authorization", auth)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, res.read()
+        except urllib.error.HTTPError as ex:
+            return ex.code, ex.read()
+
+    def test_hash_wins_and_state_uses_the_same_check(self):
+        status, body = self._open("/healthz")
+        self.assertEqual(status, 200, body)
+        hashed = "Basic " + base64.b64encode(b"trevor:hash-secret").decode()
+        plaintext = "Basic " + base64.b64encode(b"trevor:plain-secret").decode()
+        status, body = self._open("/", auth=plaintext)
+        self.assertEqual(status, 401, body)
+        status, body = self._open("/", auth=hashed)
+        self.assertEqual(status, 200, body)
+        self.assertIn(b"North Pier Cafe", body)
+        status, body = self._open("/api/state", auth=hashed)
+        self.assertEqual(status, 200, body)
+        self.assertIn("todos", json.loads(body))
+        status, body = self._open("/api/state", auth=plaintext)
+        self.assertEqual(status, 401, body)
+        status, body = self._open("/api/state", auth="Bearer test-token")
+        self.assertEqual(status, 200, body)
+
+    def test_hash_alone_is_enough(self):
+        self.cfg.password = ""
+        status, body = self._open("/healthz")
+        self.assertEqual(status, 200, body)
+        hashed = "Basic " + base64.b64encode(b"trevor:hash-secret").decode()
+        status, body = self._open("/api/state", auth=hashed)
+        self.assertEqual(status, 200, body)
+        status, _body = self._open("/api/ingest", method="POST")
+        self.assertEqual(status, 401)
+
+    def test_from_env_reads_the_hash(self):
+        previous = os.environ.get("BASIC_AUTH_PASS_SHA256")
+        os.environ["BASIC_AUTH_PASS_SHA256"] = self.digest.upper() + "\n"
+        try:
+            cfg = Config.from_env()
+        finally:
+            if previous is None:
+                os.environ.pop("BASIC_AUTH_PASS_SHA256", None)
+            else:
+                os.environ["BASIC_AUTH_PASS_SHA256"] = previous
+        self.assertEqual(cfg.password_sha256, self.digest)
+        self.assertTrue(cfg.configured())
 
 
 class IngestTests(HttpCase):
