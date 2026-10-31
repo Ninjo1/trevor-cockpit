@@ -135,6 +135,11 @@ Optional:
 | `numbers` | `[{label, value, sub, source}]` |
 | `notes` | list of strings, shown in the footer |
 | `sources` | `{connected: [...], needed: [...]}` |
+| `weather_places` | `[{name, lat, lon}]`. The server asks Open-Meteo for current conditions, today's high and low, and a 3-day outlook, in C and km/h. Cached about 30 minutes. A failed fetch shows "weather unavailable" and the rest of the page still loads. Omit the key to hide the card |
+| `travel` | `[{id, kind, title, start, end, from, to, confirmation, details, status, url}]`. `kind` is `flight`, `hotel`, `car`, `train`, or `other`. `start` and `end` are ISO 8601 with an offset. The Next up card lists items whose end has not passed, soonest first, in that item's own time plus `DISPLAY_TZ` when those differ. A flight departing within 24 hours is marked check-in open. `url` is the link |
+| `upgrades` | `[{flight, date, route, requested_cabin, status, position, checked_at, url}]`. A small card with status and when it was last checked. `url` is the link |
+
+Calendar events may also include `join_url` (Teams, Zoom, or Meet). Today's card lists meetings for today and the next 24 hours in `DISPLAY_TZ`, with a Join link when `join_url` or `join` is set, and the Vancouver time in small text. Omit any of these keys and that card stays hidden. A wrong type is rejected and the previous file is kept.
 
 The page does not show emoji or exclamation points. Those characters are stripped from visible text.
 

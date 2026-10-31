@@ -474,12 +474,15 @@ def calendar_html(data, today, zone=None):
                 bits += f'<div class="nt">{e(event["location"])}</div>'
             if event.get("note"):
                 bits += f'<div class="nt">{e(event["note"])}</div>'
+            links = []
             join = safe_href(event.get("join"))
+            join_url = safe_href(event.get("join_url"))
             if join:
-                bits += (
-                    f'<div class="lks"><a class="lk teams" href="{e_raw(join)}" target="_blank" '
-                    f'rel="noopener noreferrer">Join Teams</a></div>'
-                )
+                links.append(f'<a class="lk teams" href="{e_raw(join)}" target="_blank" rel="noopener noreferrer">Join Teams</a>')
+            if join_url and join_url != join:
+                links.append(f'<a class="lk" href="{e_raw(join_url)}" target="_blank" rel="noopener noreferrer">Join</a>')
+            if links:
+                bits += f'<div class="lks">{"".join(links)}</div>'
             rows += (
                 f'<li class="ev {classes}"><div class="tm">{when}</div><div class="bd">'
                 f'<div class="et">{tags}{title}</div>{bits}</div></li>'
@@ -490,6 +493,249 @@ def calendar_html(data, today, zone=None):
     if empty_days:
         empty = f'<p class="empty">Nothing scheduled {e(", ".join(empty_days))}.</p>'
     return '<div class="days">' + "".join(blocks) + "</div>" + empty
+
+
+VANCOUVER = ZoneInfo("America/Vancouver")
+
+
+def _countdown(start, now):
+    seconds = (start - now).total_seconds()
+    if seconds < 60:
+        return "in under a minute"
+    hours = int(seconds // 3600)
+    if hours < 1:
+        return f"in {max(1, int(seconds // 60))} min"
+    if hours < 24:
+        return "in 1 hour" if hours == 1 else f"in {hours} hours"
+    days = int(seconds // 86400)
+    return "in 1 day" if days == 1 else f"in {days} days"
+
+
+def _when_local_and_display(moment, zone, zone_label):
+    local = clock_time(moment)
+    shown = moment.astimezone(zone)
+    if shown.utcoffset() == moment.utcoffset():
+        return local
+    return f'{local} <small>{clock_time(shown)} {e(zone_label)}</small>'
+
+
+def _link_or_text(text, url):
+    href = safe_href(url)
+    label = e(text)
+    if not href:
+        return label
+    return f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{label}</a>'
+
+
+def weather_card(rows):
+    if not rows:
+        return ""
+    body = ""
+    any_ok = False
+    for row in rows:
+        if not isinstance(row, dict) or row.get("unavailable") or row.get("temp") is None:
+            body += f'<p class="empty">{e(row.get("name") if isinstance(row, dict) else "")}: weather unavailable</p>'
+            continue
+        any_ok = True
+        line = f'{row.get("temp")} C, {row.get("sky") or ""}'
+        if row.get("wind") is not None:
+            line += f', wind {row["wind"]} km/h'
+        outlook = []
+        for day in row.get("days") or []:
+            if not isinstance(day, dict):
+                continue
+            high = day.get("high")
+            low = day.get("low")
+            span = ""
+            if high is not None and low is not None:
+                span = f"{high}/{low} C"
+            elif high is not None:
+                span = f"{high} C"
+            outlook.append(f'<li><b>{e(day.get("date") or "")}</b> {e(day.get("sky") or "")} {e(span)}</li>')
+        body += (
+            f'<div class="wx"><h3 class="place">{e(row.get("name"))}</h3>'
+            f'<p class="wxnow">{e(line)}</p>'
+            + (f'<ul class="wxdays">{"".join(outlook)}</ul>' if outlook else "")
+            + "</div>"
+        )
+    if not any_ok and rows:
+        return '<article class="card glance-card" id="weather"><h2>Weather</h2><p>weather unavailable</p></article>'
+    return f'<article class="card glance-card" id="weather"><h2>Weather</h2>{body}</article>'
+
+
+def travel_card(data, zone, zone_label, now):
+    rows = data.get("travel") if isinstance(data.get("travel"), list) else None
+    if not rows:
+        return ""
+    upcoming = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        end = utc(row.get("end"))
+        start = utc(row.get("start"))
+        if end and end <= now:
+            continue
+        upcoming.append((start or end or now, row, start, end))
+    upcoming.sort(key=lambda item: item[0])
+    if not upcoming:
+        return ""
+    body = ""
+    for _sort, row, start, end in upcoming[:6]:
+        kind = row.get("kind") or "other"
+        route = " to ".join(part for part in (clean_text(row.get("from")), clean_text(row.get("to"))) if part)
+        times = ""
+        if start:
+            times = _when_local_and_display(start, zone, zone_label)
+            if end:
+                times += " to " + _when_local_and_display(end, zone, zone_label)
+        flags = []
+        if start and start > now:
+            flags.append(f'<span class="b soon">{e(_countdown(start, now))}</span>')
+        elif start and end and start <= now < end:
+            flags.append('<span class="b now">Underway</span>')
+        if kind == "flight" and start and end and end > now and 0 < (start - now).total_seconds() <= 24 * 3600:
+            flags.append('<span class="b today">Check-in open</span>')
+        if row.get("status"):
+            flags.append(f'<span class="b">{e(row.get("status"))}</span>')
+        title = _link_or_text(row.get("title") or "Trip", row.get("url"))
+        extra = ""
+        if row.get("confirmation"):
+            extra += f'<div class="nt">Confirmation {e(row.get("confirmation"))}</div>'
+        if row.get("details"):
+            extra += f'<div class="nt">{e(row.get("details"))}</div>'
+        body += (
+            f'<div class="trip"><div class="meta"><span class="tag">{e(kind)}</span>{"".join(flags)}</div>'
+            f'<div class="ttl">{title}</div>'
+            + (f'<div class="nt">{e(route)}</div>' if route else "")
+            + (f'<div class="tm">{times}</div>' if times else "")
+            + extra
+            + "</div>"
+        )
+    return f'<article class="card glance-card" id="next-up"><h2>Next up</h2>{body}</article>'
+
+
+def today_meetings_card(data, zone, zone_label, now):
+    events = [event for event in (data.get("calendar") or []) if isinstance(event, dict)]
+    if not events:
+        return ""
+    today = now.astimezone(zone).date()
+    horizon = now + dt.timedelta(hours=24)
+    chosen = []
+    for event in events:
+        start = utc(event.get("start")) if not event.get("allDay") else None
+        end = utc(event.get("end")) if not event.get("allDay") else None
+        if event.get("allDay"):
+            start_day = str(event.get("start") or "")
+            end_day = str(event.get("end") or "")
+            if start_day <= today.isoformat() < end_day:
+                chosen.append((start_day, event))
+            continue
+        if not start:
+            continue
+        if end and end <= now:
+            continue
+        on_today = start.astimezone(zone).date() == today
+        soon = now <= start <= horizon
+        if on_today or soon:
+            chosen.append((start.isoformat(), event))
+    if not chosen:
+        return ""
+    chosen.sort(key=lambda item: item[0])
+    body = ""
+    for _key, event in chosen:
+        start = utc(event.get("start"))
+        end = utc(event.get("end"))
+        if event.get("allDay") or not start:
+            when = "All day"
+            van = ""
+        else:
+            when = clock_time(start.astimezone(zone))
+            if end:
+                when += f" to {clock_time(end.astimezone(zone))}"
+            van_time = clock_time(start.astimezone(VANCOUVER))
+            van = f'<small class="van">{e(van_time)} Vancouver</small>'
+        href = safe_href(event.get("join_url") or event.get("join"))
+        join = ""
+        if href:
+            join = (
+                f'<div class="lks"><a class="lk joinbig" href="{e_raw(href)}" target="_blank" '
+                f'rel="noopener noreferrer">Join</a></div>'
+            )
+        title = e(event.get("subject") or "Meeting")
+        web = safe_href(event.get("webLink"))
+        if web:
+            title = f'<a href="{e_raw(web)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+        body += (
+            f'<div class="meet"><div class="tm">{when}{van}</div>'
+            f'<div class="ttl">{title}</div>{join}</div>'
+        )
+    return (
+        f'<article class="card glance-card" id="today-meet"><h2>Today <small>{e(zone_label)}</small></h2>{body}</article>'
+    )
+
+
+def upgrades_card(data, zone):
+    rows = data.get("upgrades") if isinstance(data.get("upgrades"), list) else None
+    if not rows:
+        return ""
+    body = ""
+    shown = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        shown += 1
+        if shown > 12:
+            break
+        title = _link_or_text(row.get("flight") or "Flight", row.get("url"))
+        bits = [e(part) for part in (row.get("date"), row.get("route"), row.get("requested_cabin")) if part]
+        checked = row.get("checked_at")
+        moment = utc(checked) if isinstance(checked, str) else None
+        if moment:
+            checked_text = "Checked " + day_label(moment.astimezone(zone).date()) + ", " + clock_time(moment.astimezone(zone))
+        elif checked:
+            checked_text = "Checked " + clean_text(checked)
+        else:
+            checked_text = ""
+        position = row.get("position")
+        pos = f"Position {position}" if position not in (None, "") else ""
+        body += (
+            f'<div class="up"><div class="ttl">{title}</div>'
+            f'<div class="meta"><span class="b">{e(row.get("status") or "")}</span>'
+            + (f"<span>{e(pos)}</span>" if pos else "")
+            + "</div>"
+            + (f'<div class="nt">{" · ".join(bits)}</div>' if bits else "")
+            + (f'<div class="src">{e(checked_text)}</div>' if checked_text else "")
+            + "</div>"
+        )
+    if not body:
+        return ""
+    return f'<article class="card glance-card" id="upgrades"><h2>Upgrades</h2>{body}</article>'
+
+
+def glance_html(data, zone, zone_label, weather=None, now=None):
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    places = data.get("weather_places") if isinstance(data, dict) else None
+    weather_rows = weather
+    if isinstance(places, list) and places and weather_rows is None:
+        try:
+            from weather import get_forecasts
+
+            weather_rows = get_forecasts(places)
+        except Exception:
+            weather_rows = [{"name": "", "unavailable": True}]
+    cards = []
+    if isinstance(places, list) and places:
+        cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}]))
+    if isinstance(data, dict):
+        cards.append(travel_card(data, zone, zone_label, now))
+        cards.append(today_meetings_card(data, zone, zone_label, now))
+        cards.append(upgrades_card(data, zone))
+    cards = [card for card in cards if card]
+    if not cards:
+        return ""
+    return f'<section class="glance" aria-label="At a glance">{"".join(cards)}</section>'
 
 
 def restaurants_html(data):
@@ -720,7 +966,7 @@ def _snoozed(item, today):
     return bool(snooze and isinstance(snooze, str) and snooze > today.isoformat())
 
 
-def render_main(data, state, area="All", today=None, zone=None, zone_label=None):
+def render_main(data, state, area="All", today=None, zone=None, zone_label=None, weather=None, now=None):
     if zone is None:
         zone, zone_label = resolve_display()
     elif not zone_label:
@@ -758,6 +1004,7 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None)
     mail_done = [item for item in emails if item["done"]]
     group = area == "All"
     html_out = chips_html(area)
+    html_out += glance_html(data, zone, zone_label, weather=weather, now=now)
     html_out += bottleneck_html(data)
     html_out += restaurants_html(data)
     html_out += f'<section id="tasks"><h2>Do now <small>{len(now_rows)}</small></h2>'
@@ -852,10 +1099,12 @@ def asof_html(data, zone=None, zone_label=None):
     return f"Data as of {stamp} {zone_label}. Clock times are local to each city."
 
 
-def fill(template, data, state, area="All", today=None, env=None):
+def fill(template, data, state, area="All", today=None, env=None, weather=None, now=None):
     zone, zone_label = resolve_display(env)
     _label, home_key = home_clock(env)
-    main, counts = render_main(data, state, area, today=today, zone=zone, zone_label=zone_label)
+    main, counts = render_main(
+        data, state, area, today=today, zone=zone, zone_label=zone_label, weather=weather, now=now
+    )
     return (
         template.replace("<!--PRE_MAIN-->", main)
         .replace("<!--PRE_CLOCKS-->", clocks_html(env=env))

@@ -209,6 +209,15 @@ input, select, textarea {
   border: 1.5px solid var(--l); background: var(--bg); color: var(--t);
 }
 textarea { min-height: 72px; }
+.glance { display: grid; gap: 10px; margin: 4px 0 14px; }
+.glance-card h2 { margin-top: 0; }
+.wxnow { font-size: 20px; font-weight: 750; margin: 4px 0; }
+.wxdays { margin: 4px 0 8px; padding-left: 1.1rem; }
+.wxdays li { margin: 2px 0; }
+.trip, .meet, .up { padding: 8px 0; border-top: 1px solid var(--l); }
+.trip:first-of-type, .meet:first-of-type, .up:first-of-type { border-top: 0; }
+.van { display: block; color: var(--m); font-size: 13px; font-weight: 550; }
+.joinbig { min-height: 48px; width: 100%; justify-content: center; font-size: 17px; background: var(--c); color: #041018; border-color: var(--c); }
 .cards, .days, .prg, .nums { display: grid; gap: 10px; }
 .card, .day, .num {
   background: var(--p); border: 1px solid var(--l); border-radius: 12px; padding: 12px 14px;
@@ -244,7 +253,7 @@ footer { margin-top: 28px; font-size: 14px; }
   .clocks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .ct { font-size: 24px; }
   form.add { grid-template-columns: 1fr 160px 170px auto; align-items: end; }
-  .cards, .prg { grid-template-columns: 1fr 1fr; }
+  .cards, .prg, .glance { grid-template-columns: 1fr 1fr; }
   .days { grid-template-columns: 1fr 1fr; }
   .nums { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
