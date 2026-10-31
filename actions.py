@@ -123,6 +123,15 @@ def apply(state, op, body, now_iso):
         entry["handled"] = handled
         entry["handled_at"] = now_iso if handled else None
         return {"id": item_id, "handled": handled}
+    if op == "todo/quadrant":
+        item_id = check_id(body.get("id"))
+        quadrant = body.get("quadrant")
+        if quadrant not in ("do_now", "schedule", "delegate", "delete"):
+            raise ValueError("quadrant must be do_now, schedule, delegate, or delete")
+        custom = _custom(state, item_id)
+        entry = custom if custom is not None else _entry(todos, item_id)
+        entry["quadrant"] = quadrant
+        return {"id": item_id, "quadrant": quadrant}
     if op == "snooze":
         item_id = check_id(body.get("id"))
         kind = body.get("kind")
@@ -144,7 +153,7 @@ def brief_log(op, body, now_iso):
     """A short audit line. Notes are not copied into the log."""
     brief = {}
     if isinstance(body, dict):
-        for key in ("id", "done", "handled", "area", "due", "until", "kind"):
+        for key in ("id", "done", "handled", "area", "due", "until", "kind", "quadrant"):
             if key in body:
                 brief[key] = body[key]
         if op == "todo/add" and isinstance(body.get("title"), str):
