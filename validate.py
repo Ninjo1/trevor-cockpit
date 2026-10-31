@@ -3,6 +3,7 @@
 Unknown keys are kept. A bad type is rejected so the previous file stays in
 place. restaurants is required.
 """
+import datetime as dt
 import re
 
 ITEM_KINDS = {"task", "email", "draft", "meeting", "money"}
@@ -10,6 +11,7 @@ SECTIONS = {"now", "open", "waiting", "watch", "owed", "money"}
 AREAS_HINT = {"Echandia", "FiFi4", "Personal", "Personal / Own cos", "Household"}
 ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,80}\Z")
 DUE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+TRAVEL_KINDS = {"flight", "hotel", "car", "train", "other"}
 MAX_ITEMS = 2000
 
 
@@ -69,6 +71,12 @@ def validate_data(obj):
         raise ValueError("generated_at must be a string")
     if "schema" in obj and obj["schema"] is not None and not isinstance(obj["schema"], int):
         raise ValueError("schema must be an integer")
+    if "weather_places" in obj and obj["weather_places"] is not None:
+        _weather_places(obj["weather_places"])
+    if "travel" in obj and obj["travel"] is not None:
+        _travel(obj["travel"])
+    if "upgrades" in obj and obj["upgrades"] is not None:
+        _upgrades(obj["upgrades"])
     return obj
 
 
@@ -174,6 +182,8 @@ def _calendar(events):
             raise ValueError(f"calendar[{index}].allDay must be true or false")
         if "stale" in event and not isinstance(event["stale"], bool):
             raise ValueError(f"calendar[{index}].stale must be true or false")
+        if "join_url" in event and event["join_url"] is not None and not isinstance(event["join_url"], str):
+            raise ValueError(f"calendar[{index}].join_url must be a string")
 
 
 def _money(rows):
@@ -201,3 +211,72 @@ def _money(rows):
             not isinstance(row["due"], str) or not DUE.fullmatch(row["due"])
         ):
             raise ValueError(f"money[{index}].due must be YYYY-MM-DD")
+
+
+def _moment(value, field):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be an ISO 8601 time")
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as ex:
+        raise ValueError(f"{field} must be an ISO 8601 time") from ex
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a UTC offset")
+
+
+def _weather_places(places):
+    if not isinstance(places, list):
+        raise ValueError("weather_places must be a list")
+    if len(places) > 8:
+        raise ValueError("weather_places is too long")
+    for index, place in enumerate(places):
+        if not isinstance(place, dict):
+            raise ValueError(f"weather_places[{index}] must be an object")
+        _string(place, "name", f"weather_places[{index}].name")
+        for key, limit in (("lat", 90), ("lon", 180)):
+            raw = place.get(key)
+            if not _number(raw) or abs(float(raw)) > limit:
+                raise ValueError(f"weather_places[{index}].{key} must be a number")
+
+
+def _travel(rows):
+    if not isinstance(rows, list):
+        raise ValueError("travel must be a list")
+    if len(rows) > 200:
+        raise ValueError("travel is too long")
+    seen = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"travel[{index}] must be an object")
+        _loose_id(row.get("id"), 80, f"travel[{index}].id")
+        if row["id"] in seen:
+            raise ValueError("duplicate travel id")
+        seen.add(row["id"])
+        _string(row, "title", f"travel[{index}].title")
+        if row.get("kind") not in TRAVEL_KINDS:
+            raise ValueError(f"travel[{index}].kind must be flight, hotel, car, train, or other")
+        _moment(row.get("start"), f"travel[{index}].start")
+        _moment(row.get("end"), f"travel[{index}].end")
+        for key in ("from", "to", "confirmation", "details", "status", "url"):
+            if key in row and row[key] is not None and not isinstance(row[key], str):
+                raise ValueError(f"travel[{index}].{key} must be a string")
+
+
+def _upgrades(rows):
+    if not isinstance(rows, list):
+        raise ValueError("upgrades must be a list")
+    if len(rows) > 50:
+        raise ValueError("upgrades is too long")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"upgrades[{index}] must be an object")
+        _string(row, "flight", f"upgrades[{index}].flight")
+        _string(row, "status", f"upgrades[{index}].status")
+        for key in ("date", "route", "requested_cabin", "checked_at", "url"):
+            if key in row and row[key] is not None and not isinstance(row[key], str):
+                raise ValueError(f"upgrades[{index}].{key} must be a string")
+        if "position" in row and row["position"] is not None and not (
+            isinstance(row["position"], str) or _number(row["position"])
+        ):
+            raise ValueError(f"upgrades[{index}].position must be a string or number")

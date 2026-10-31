@@ -554,5 +554,153 @@ class PageTests(unittest.TestCase):
                     self.assertNotIn(needle, text, path)
 
 
+class GlanceTests(unittest.TestCase):
+    def _base(self):
+        return {"items": [{"id": "S-1", "title": "Keep this task", "area": "Personal", "kind": "task", "section": "now", "due": "", "done": False, "links": []}], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
+
+    def test_missing_keys_hide_the_cards(self):
+        html, _counts = render.render_main(self._base(), fresh_state(), now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc))
+        self.assertNotIn('id="weather"', html)
+        self.assertNotIn('id="next-up"', html)
+        self.assertNotIn('id="today-meet"', html)
+        self.assertNotIn('id="upgrades"', html)
+        self.assertIn("Keep this task", html)
+
+    def test_schema_accepts_glance_keys_and_rejects_bad_types(self):
+        payload = self._base()
+        payload["weather_places"] = [{"name": "Bangkok", "lat": 13.75, "lon": 100.5}]
+        payload["travel"] = [{
+            "id": "T-1", "kind": "flight", "title": "Sample hop",
+            "start": "2026-11-03T12:00:00+07:00", "end": "2026-11-03T16:00:00+07:00",
+            "from": "BKK", "to": "CNX", "confirmation": "ABC123", "details": "Seat 12A",
+            "status": "confirmed", "url": "https://example.com/trip",
+        }]
+        payload["upgrades"] = [{
+            "flight": "DL 100", "date": "2026-11-03", "route": "BKK-SEA",
+            "requested_cabin": "Delta One", "status": "Waitlisted", "position": 4,
+            "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/delta",
+        }]
+        payload["calendar"] = [{
+            "id": "m1", "subject": "Sample call", "allDay": False,
+            "start": "2026-11-01T18:00:00Z", "end": "2026-11-01T19:00:00Z",
+            "join_url": "https://teams.microsoft.com/l/meetup-join/sample", "stale": False,
+        }]
+        validate_data(payload)
+        bad = self._base()
+        bad["weather_places"] = "Bangkok"
+        with self.assertRaises(ValueError):
+            validate_data(bad)
+        bad = dict(payload)
+        bad["travel"] = [dict(payload["travel"][0], kind="boat")]
+        with self.assertRaises(ValueError):
+            validate_data(bad)
+        bad = dict(payload)
+        bad["weather_places"] = [{"name": "Bangkok", "lat": "north", "lon": 1}]
+        with self.assertRaises(ValueError):
+            validate_data(bad)
+
+    def test_travel_meetings_and_upgrades_render(self):
+        now = dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc)
+        data = self._base()
+        data["travel"] = [
+            {
+                "id": "T-old", "kind": "flight", "title": "Already landed",
+                "start": "2026-10-01T01:00:00+07:00", "end": "2026-10-01T04:00:00+07:00",
+            },
+            {
+                "id": "T-soon", "kind": "flight", "title": "Sample hop",
+                "start": "2026-11-03T12:00:00+07:00", "end": "2026-11-03T16:00:00+07:00",
+                "from": "BKK", "to": "CNX", "url": "https://example.com/trip",
+            },
+            {
+                "id": "T-check", "kind": "flight", "title": "Morning hop",
+                "start": "2026-11-01T20:00:00+07:00", "end": "2026-11-01T22:00:00+07:00",
+                "url": "https://example.com/check",
+            },
+        ]
+        data["calendar"] = [{
+            "id": "m1", "subject": "Sample call", "allDay": False,
+            "start": "2026-11-01T18:00:00Z", "end": "2026-11-01T19:00:00Z",
+            "join_url": "https://teams.microsoft.com/l/meetup-join/sample",
+            "webLink": "https://outlook.office.com/calendar/item/sample",
+            "stale": False,
+        }]
+        data["upgrades"] = [{
+            "flight": "DL 100", "date": "2026-11-03", "route": "BKK-SEA",
+            "requested_cabin": "Delta One", "status": "Waitlisted", "position": 4,
+            "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/delta",
+        }]
+        html, _counts = render.render_main(
+            data, fresh_state(), zone=ZoneInfo("America/Vancouver"), zone_label="Vancouver", now=now,
+        )
+        self.assertIn("Sample hop", html)
+        self.assertNotIn("Already landed", html)
+        self.assertIn("in 2 days", html)
+        self.assertIn("Check-in open", html)
+        self.assertIn('href="https://example.com/trip"', html)
+        self.assertIn("12:00 PM", html)
+        self.assertIn("Sample call", html)
+        self.assertIn('class="lk joinbig"', html)
+        self.assertIn("Vancouver", html)
+        self.assertIn("Waitlisted", html)
+        self.assertIn('href="https://example.com/delta"', html)
+        self.assertIn("Checked", html)
+        self.assertNotIn("!", visible(html))
+
+    def test_weather_fallback_and_cache(self):
+        import weather as weather_mod
+        places = [{"name": "Bangkok", "lat": 13.75, "lon": 100.5}]
+        calls = []
+
+        def boom(url):
+            calls.append(url)
+            raise OSError("down")
+
+        clock = {"t": 1_700_000_000.0}
+        cache = {}
+        rows = weather_mod.get_forecasts(places, fetcher=boom, clock=lambda: clock["t"], cache=cache)
+        self.assertTrue(rows[0]["unavailable"])
+        data = self._base()
+        data["weather_places"] = places
+        html, _counts = render.render_main(
+            data, fresh_state(), weather=rows, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
+        )
+        self.assertIn("weather unavailable", html)
+        self.assertIn("Keep this task", html)
+        self.assertIn("open-meteo.com", calls[0])
+
+        calls.clear()
+        payload = {
+            "current": {"temperature_2m": 31.2, "weather_code": 1, "wind_speed_10m": 12.4},
+            "daily": {
+                "time": ["2026-11-01", "2026-11-02", "2026-11-03"],
+                "temperature_2m_max": [33, 32, 31],
+                "temperature_2m_min": [25, 24, 24],
+                "weather_code": [1, 61, 3],
+            },
+        }
+
+        def ok(url):
+            calls.append(url)
+            return payload
+
+        cache = {}
+        first = weather_mod.get_forecasts(places, fetcher=ok, clock=lambda: clock["t"], cache=cache)
+        second = weather_mod.get_forecasts(places, fetcher=ok, clock=lambda: clock["t"] + 10, cache=cache)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first[0]["temp"], 31)
+        self.assertEqual(second[0]["sky"], "Mainly clear")
+        self.assertEqual(len(first[0]["days"]), 3)
+        clock["t"] += weather_mod.CACHE_SECONDS + 5
+        weather_mod.get_forecasts(places, fetcher=ok, clock=lambda: clock["t"], cache=cache)
+        self.assertEqual(len(calls), 2)
+        shown, _counts = render.render_main(
+            data, fresh_state(), weather=first, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
+        )
+        self.assertIn("31 C", shown)
+        self.assertIn("km/h", shown)
+        self.assertNotIn("!", visible(shown))
+
+
 if __name__ == "__main__":
     unittest.main()

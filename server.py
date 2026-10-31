@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import render
+import weather as weather_mod
 from actions import AREAS, apply, brief_log
 from auth import basic_ok, bearer_ok, origin_allowed
 from icons import MANIFEST, icon_png
@@ -153,6 +154,12 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 extra=[("WWW-Authenticate", 'Basic realm="Cockpit", charset="UTF-8"')],
             )
 
+        def _forecasts(self, data):
+            places = data.get("weather_places") if isinstance(data, dict) else None
+            if not isinstance(places, list) or not places:
+                return None
+            return weather_mod.get_forecasts(places, data_dir=self.cfg.data_dir)
+
         def _page(self):
             with open(os.path.join(ROOT, "app.html"), encoding="utf-8") as handle:
                 template = handle.read()
@@ -160,7 +167,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 with self.state_lock:
                     state = load_state(self.cfg)
                     data = load_data(self.cfg)
-                page = render.fill(template, data, state, area=self._area())
+                forecasts = self._forecasts(data)
+                page = render.fill(template, data, state, area=self._area(), weather=forecasts)
             except StateError as ex:
                 self._send(500, f"Could not read ticks: {ex}", "text/plain; charset=utf-8")
                 return
@@ -207,7 +215,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 with self.state_lock:
                     data = load_data(self.cfg)
                     state = load_state(self.cfg)
-                main, counts = render.render_main(data, state, self._area())
+                forecasts = self._forecasts(data)
+                main, counts = render.render_main(data, state, self._area(), weather=forecasts)
             except StateError as ex:
                 self._json(500, {"ok": False, "error": str(ex)})
                 return
