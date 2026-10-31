@@ -1,0 +1,236 @@
+{
+  "generated_at": "2026-10-30T14:00:00Z",
+  "schema": 3,
+  "fx": {
+    "usdcad": 1.25,
+    "as_of": "2026-10-29",
+    "source": "Sample fallback, not a live rate"
+  },
+  "restaurants": {
+    "city": "Sample Harbor",
+    "as_of": "2026-10-30",
+    "eat": [
+      {
+        "name": "North Pier Cafe",
+        "area": "Pier",
+        "cuisine": "Soup and bread",
+        "price": "About 20 CAD",
+        "why": "Sample place near the demo dock. Quiet enough to review a checklist.",
+        "map_url": "https://example.com/maps/north-pier-cafe"
+      },
+      {
+        "name": "Lantern Noodle",
+        "area": "Market",
+        "cuisine": "Noodles",
+        "price": "About 18 CAD",
+        "why": "Sample late option after a long call block.",
+        "map_url": "https://example.com/maps/lantern-noodle"
+      }
+    ],
+    "delivery": [
+      {
+        "name": "Harbor Bowl",
+        "app": "SampleEats",
+        "why": "Sample delivery when you cannot leave the room.",
+        "url": "https://example.com/order/harbor-bowl"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": "S-now-1",
+      "area": "Echandia",
+      "kind": "task",
+      "section": "now",
+      "due": "2026-10-30",
+      "priority": null,
+      "title": "Sample: confirm the harbor demo checklist",
+      "note": "Fake task for local development.",
+      "done_note": "",
+      "ledger_ids": ["C-100"],
+      "refs": ["C-100"],
+      "done": false,
+      "links": [
+        {"label": "ClickUp sample", "href": "https://app.clickup.com/t/sampletask", "kind": "clickup"},
+        {"label": "Outlook sample", "href": "https://outlook.office.com/mail/sample", "kind": "outlook"}
+      ]
+    },
+    {
+      "id": "S-open-1",
+      "area": "FiFi4",
+      "kind": "task",
+      "section": "open",
+      "due": "2026-11-02",
+      "priority": null,
+      "title": "Sample: send the weekly note to the demo team",
+      "note": "",
+      "done_note": "",
+      "ledger_ids": [],
+      "refs": [],
+      "done": false,
+      "links": []
+    },
+    {
+      "id": "S-wait-1",
+      "area": "Personal",
+      "kind": "task",
+      "section": "waiting",
+      "due": "",
+      "priority": "low",
+      "title": "Sample: waiting on a reply from Demo Person",
+      "note": "Not a real person.",
+      "done_note": "",
+      "ledger_ids": [],
+      "refs": [],
+      "done": false,
+      "links": []
+    },
+    {
+      "id": "S-mail-1",
+      "area": "Echandia",
+      "kind": "email",
+      "section": "now",
+      "due": "2026-10-30",
+      "priority": null,
+      "title": "Sample email: reply to demo.sender@example.com",
+      "note": "Asking for a sample date. Not a real inbox.",
+      "done_note": "",
+      "ledger_ids": [],
+      "refs": [],
+      "done": false,
+      "links": [
+        {"label": "Open sample message", "href": "https://outlook.office.com/mail/inbox/sample", "kind": "outlook"}
+      ]
+    },
+    {
+      "id": "S-watch-1",
+      "area": "Personal",
+      "kind": "task",
+      "section": "watch",
+      "due": "",
+      "priority": "low",
+      "title": "Sample watch: renew the demo domain someday",
+      "note": "",
+      "done_note": "",
+      "ledger_ids": [],
+      "refs": [],
+      "done": false,
+      "links": []
+    }
+  ],
+  "money": [
+    {
+      "id": "M-1",
+      "who": "Sample Labs",
+      "direction": "owed_to_me",
+      "amount": "100.00",
+      "currency": "USD",
+      "area": "Echandia",
+      "due": "2026-11-15",
+      "note": "Sample invoice. Not a real balance.",
+      "href": "https://example.com/invoice/sample"
+    },
+    {
+      "id": "M-2",
+      "who": "Sample Marina",
+      "direction": "i_owe",
+      "amount": "40.00",
+      "currency": "CAD",
+      "area": "Personal",
+      "due": "2026-10-28",
+      "note": "Sample slip for a demo berth.",
+      "href": ""
+    }
+  ],
+  "calendar": [
+    {
+      "id": "cal-harbor",
+      "subject": "Sample harbor check-in",
+      "allDay": false,
+      "start": "2026-10-30T17:00:00Z",
+      "end": "2026-10-30T18:00:00Z",
+      "location": "Sample pier",
+      "join": "https://teams.microsoft.com/l/meetup-join/sample",
+      "webLink": "https://outlook.office.com/calendar/item/sample-harbor",
+      "note": "",
+      "stale": false
+    },
+    {
+      "id": "cal-flight",
+      "subject": "DL 1001 Sample City to Other City",
+      "allDay": false,
+      "start": "2026-10-30T16:30:00Z",
+      "end": "2026-10-30T19:00:00Z",
+      "location": "",
+      "join": "",
+      "webLink": "https://example.com/flights/dl1001",
+      "note": "Sample flight that overlaps the harbor check-in.",
+      "stale": false
+    },
+    {
+      "id": "cal-tomorrow",
+      "subject": "Sample planning block",
+      "allDay": false,
+      "start": "2026-10-31T18:00:00Z",
+      "end": "2026-10-31T19:00:00Z",
+      "location": "",
+      "join": "",
+      "webLink": "https://outlook.office.com/calendar/item/sample-plan",
+      "note": "",
+      "stale": false
+    },
+    {
+      "id": "cal-hold",
+      "subject": "Sample travel hold",
+      "allDay": true,
+      "start": "2026-11-01",
+      "end": "2026-11-02",
+      "location": "",
+      "join": "",
+      "webLink": "",
+      "note": "",
+      "stale": false
+    }
+  ],
+  "notes": [
+    "Sample data for local development. Replace it by posting a real data file to /api/ingest."
+  ],
+  "principles": {
+    "musk": {
+      "title": "Musk 5-step algorithm",
+      "bottleneck": "Sample bottleneck: one checklist closed before the demo meeting starts.",
+      "steps": [
+        ["Question the requirement", "Does this sample task need a meeting, or will a short note close it?"],
+        ["Delete", "Drop the duplicate sample reminder."],
+        ["Simplify", "One list for the demo day."],
+        ["Accelerate", "Send the sample note before noon."],
+        ["Automate", "Let the morning push refresh the board."]
+      ]
+    },
+    "robbins": {
+      "title": "Robbins RPM",
+      "rpm_result": "End the sample day with the checklist closed.",
+      "rpm_purpose": "Practice the board without real data.",
+      "rpm_plan": ["Read the sample task.", "Tick it.", "Reload and see that it stayed done."],
+      "standards": ["No sample item left unclear."],
+      "pain": "A demo that starts with an open checklist.",
+      "pleasure": "A clean sample board.",
+      "morning": ["What am I committed to today?"],
+      "evening": ["What did I learn today?"],
+      "values": ["Clarity", "Follow-through"],
+      "kaizen": "Each sample push, check one link."
+    }
+  },
+  "numbers": [
+    {
+      "label": "Sample figure",
+      "value": "1 of 1",
+      "sub": "Not a real metric.",
+      "source": "sample/data.json"
+    }
+  ],
+  "sources": {
+    "connected": ["Sample file"],
+    "needed": ["A real data push"]
+  }
+}

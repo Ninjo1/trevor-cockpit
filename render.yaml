@@ -1,0 +1,25 @@
+# Render Blueprint for the private Cockpit.
+# New > Blueprint, select this repo, then set BASIC_AUTH_PASS and INGEST_TOKEN.
+services:
+  - type: web
+    name: trevor-cockpit
+    runtime: python
+    plan: starter
+    buildCommand: python3 -m compileall -q .
+    startCommand: python3 server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DATA_DIR
+        value: /var/data
+      - key: BASIC_AUTH_USER
+        value: trevor
+      - key: BASIC_AUTH_PASS
+        sync: false
+      - key: INGEST_TOKEN
+        sync: false
+    disk:
+      name: cockpit-data
+      mountPath: /var/data
+      sizeGB: 1

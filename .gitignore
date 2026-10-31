@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.secret
+var/
+*.log
+.DS_Store
+state.json
+data.json.prev
+backups/
