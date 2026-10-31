@@ -85,6 +85,29 @@ h1 { font-size: 20px; letter-spacing: 0.04em; margin: 0; font-weight: 750; }
 .meta, .clknote { color: var(--m); font-size: 14px; margin: 8px 0 0; }
 .fxline { color: var(--c); font-size: 15px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
 .fxline b { font-size: 18px; }
+.stale-amber { color: var(--a); font-weight: 750; }
+.stale-red { color: var(--r); font-weight: 750; }
+.fxconv { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 8px; }
+.fxconv label { min-width: 88px; }
+.fxconv output { min-height: 44px; display: inline-flex; align-items: center; font-weight: 750; }
+.jarvis { border: 1px solid var(--l); border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; background: var(--p); }
+.jarvis .lab { display: block; }
+.jarvis .fire, .jarvis .decide { margin: 4px 0; }
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.kpi { border-top: 3px solid var(--m); border-radius: 8px; padding: 8px; background: var(--bg); }
+.kpi.red { border-top-color: var(--r); }
+.kpi.amber { border-top-color: var(--a); }
+.kpi.green { border-top-color: var(--g); }
+.kpi .nv { font-size: 20px; }
+.quads { display: grid; gap: 10px; }
+.quad { border: 1px solid var(--l); border-radius: 12px; padding: 4px 10px 10px; }
+.q-do_now { border-color: var(--r); }
+.q-schedule { border-color: var(--c); }
+.q-delegate { border-color: var(--a); }
+.q-delete { border-color: var(--m); }
+li.wait.hot { border-left: 3px solid var(--r); padding-left: 8px; }
+form.move { display: flex; gap: 8px; align-items: center; }
+form.move select { min-height: 44px; }
 .clocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .clk { background: var(--p); border: 1px solid var(--l); border-radius: 12px; padding: 8px 10px; min-width: 0; }
 .clk.on { border-color: var(--g); }
@@ -253,7 +276,8 @@ footer { margin-top: 28px; font-size: 14px; }
   .clocks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .ct { font-size: 24px; }
   form.add { grid-template-columns: 1fr 160px 170px auto; align-items: end; }
-  .cards, .prg, .glance { grid-template-columns: 1fr 1fr; }
+  .cards, .prg, .glance, .quads { grid-template-columns: 1fr 1fr; }
+  .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .days { grid-template-columns: 1fr 1fr; }
   .nums { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
@@ -273,8 +297,15 @@ footer { margin-top: 28px; font-size: 14px; }
       <a class="tool" href="/logout">Sign out</a>
     </div>
   </div>
-  <p class="meta" id="asof"><!--PRE_ASOF--></p>
+  <p class="meta <!--PRE_FRESH-->" id="asof"><!--PRE_ASOF--></p>
   <!--PRE_FX-->
+  <form id="fxconv" class="fxconv" action="#" autocomplete="off">
+    <label>Amount<input id="fxamt" type="number" min="0" step="0.01" value="100"></label>
+    <label>From<select id="fxfrom"><option>THB</option><option>JPY</option><option>USD</option><option selected>CAD</option></select></label>
+    <label>To<select id="fxto"><option>THB</option><option>JPY</option><option selected>USD</option><option>CAD</option></select></label>
+    <output id="fxout" for="fxamt">-</output>
+  </form>
+  <script type="application/json" id="fx-rates"><!--PRE_FX_JSON--></script>
   <div class="clocks" id="clocks" data-home-tz="<!--PRE_HOME_TZ-->"><!--PRE_CLOCKS--></div>
   <p class="clknote">Clocks show the time this page was built, then update while it stays open.</p>
 </header>
@@ -370,6 +401,8 @@ footer { margin-top: 28px; font-size: 14px; }
       if (!body.title) return;
     } else if (op === "email/handled") {
       body = { id: data.get("id"), handled: data.get("handled") === "1" };
+    } else if (op === "todo/quadrant") {
+      body = { id: data.get("id"), quadrant: data.get("quadrant") };
     } else if (op === "snooze") {
       body = {
         id: data.get("id"),
@@ -395,7 +428,7 @@ footer { margin-top: 28px; font-size: 14px; }
       await refresh();
     } catch (err) {
       row.classList.remove("busy");
-      if (op === "todo/toggle" || op === "email/handled") {
+      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant") {
         form.submit();
         return;
       }
@@ -461,6 +494,29 @@ footer { margin-top: 28px; font-size: 14px; }
   tick();
   setInterval(tick, 30000);
 
+  function fxTable() {
+    try { return JSON.parse(byId("fx-rates").textContent || "{}"); } catch (err) { return {}; }
+  }
+  function convertFx() {
+    const table = fxTable();
+    const cad = table.cad_per || {};
+    const amount = Number(byId("fxamt").value);
+    const from = byId("fxfrom").value;
+    const to = byId("fxto").value;
+    const out = byId("fxout");
+    if (!amount || !cad[from] || !cad[to]) {
+      out.textContent = "Rate unavailable";
+      return;
+    }
+    const value = amount * cad[from] / cad[to];
+    out.textContent = value.toLocaleString("en-CA", { maximumFractionDigits: 2 }) + " " + to;
+  }
+  ["fxamt", "fxfrom", "fxto"].forEach((id) => {
+    const node = byId(id);
+    if (node) node.addEventListener("input", convertFx);
+  });
+  convertFx();
+
   fetch("https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=1", { credentials: "same-origin" })
     .then((res) => { if (!res.ok) throw new Error("fx"); return res.json(); })
     .then((payload) => {
@@ -471,6 +527,12 @@ footer { margin-top: 28px; font-size: 14px; }
       byId("fxr").textContent = rate.toFixed(4);
       byId("fxd").textContent = latest.d;
       byId("fxs").textContent = "Bank of Canada Valet, live";
+      const table = fxTable();
+      table.cad_per = table.cad_per || {};
+      table.cad_per.USD = rate;
+      table.cad_per.CAD = 1;
+      byId("fx-rates").textContent = JSON.stringify(table);
+      convertFx();
     })
     .catch(() => {});
 

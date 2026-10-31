@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import fxrates
 import render
 import weather as weather_mod
 from actions import AREAS, apply, brief_log
@@ -154,6 +155,17 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 extra=[("WWW-Authenticate", 'Basic realm="Cockpit", charset="UTF-8"')],
             )
 
+        def _rates(self, data):
+            fallback = None
+            fx = data.get("fx") if isinstance(data, dict) else None
+            if isinstance(fx, dict):
+                fallback = fx.get("usdcad", fx.get("rate"))
+            elif isinstance(fx, (int, float)) and not isinstance(fx, bool):
+                fallback = fx
+            elif isinstance(data, dict) and isinstance(data.get("fx_usdcad"), (int, float)):
+                fallback = data.get("fx_usdcad")
+            return fxrates.get_rates(fallback)
+
         def _forecasts(self, data):
             places = data.get("weather_places") if isinstance(data, dict) else None
             if not isinstance(places, list) or not places:
@@ -168,7 +180,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     state = load_state(self.cfg)
                     data = load_data(self.cfg)
                 forecasts = self._forecasts(data)
-                page = render.fill(template, data, state, area=self._area(), weather=forecasts)
+                rates = self._rates(data)
+                page = render.fill(template, data, state, area=self._area(), weather=forecasts, rates=rates)
             except StateError as ex:
                 self._send(500, f"Could not read ticks: {ex}", "text/plain; charset=utf-8")
                 return
@@ -216,7 +229,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     data = load_data(self.cfg)
                     state = load_state(self.cfg)
                 forecasts = self._forecasts(data)
-                main, counts = render.render_main(data, state, self._area(), weather=forecasts)
+                rates = self._rates(data)
+                main, counts = render.render_main(data, state, self._area(), weather=forecasts, rates=rates)
             except StateError as ex:
                 self._json(500, {"ok": False, "error": str(ex)})
                 return
@@ -330,6 +344,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                         "due": fields.get("due", ""),
                         "notes": fields.get("notes", ""),
                     }
+                elif op == "todo/quadrant":
+                    payload = {"id": fields["id"], "quadrant": fields.get("quadrant")}
                 elif op == "snooze":
                     payload = {
                         "id": fields["id"],

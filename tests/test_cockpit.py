@@ -702,5 +702,79 @@ class GlanceTests(unittest.TestCase):
         self.assertNotIn("!", visible(shown))
 
 
+class RedesignTests(unittest.TestCase):
+    def test_quadrant_defaults_and_persisted_move(self):
+        today = dt.date(2026, 10, 31)
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-10-30", "important": True, "kind": "task",
+        }, today), "do_now")
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-12-01", "important": True, "kind": "task",
+        }, today), "schedule")
+        self.assertEqual(render.derive_quadrant({
+            "section": "open", "due": "2026-10-30", "owner": "Ada", "kind": "task",
+        }, today), "delegate")
+        self.assertEqual(render.derive_quadrant({
+            "section": "watch", "due": "", "priority": "low", "kind": "task",
+        }, today), "delete")
+        from actions import apply
+        state = fresh_state()
+        apply(state, "todo/quadrant", {"id": "S-open-1", "quadrant": "delete"}, "2026-10-31T00:00:00Z")
+        data = json.load(open(SAMPLE, encoding="utf-8"))
+        html, _counts = render.render_main(data, state, today=today, now=dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc))
+        chunk = html.split('id="quadrant-delete"')[1].split('id="quadrant-')[0]
+        self.assertIn("weekly note", chunk)
+
+    def test_clone_filter_and_note_and_freshness(self):
+        events = [
+            {"id": "a", "subject": "Real call", "start": "2026-11-01T17:00:00Z", "end": "2026-11-01T18:00:00Z"},
+            {"id": "b", "subject": "Real call (Clone)", "start": "2026-11-01T17:00:00Z", "end": "2026-11-01T18:00:00Z", "note": "Starts 10:00 AM Bangkok"},
+        ]
+        kept = render.drop_clones(events)
+        self.assertEqual([row["id"] for row in kept], ["a"])
+        self.assertEqual(render.tidy_note("Starts 10:00 AM Bangkok", "Bangkok"), "Starts")
+        generated = dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)
+        now = dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc)
+        self.assertEqual(render.freshness_class(generated, now), "stale-red")
+        self.assertEqual(render.freshness_class(now - dt.timedelta(hours=13), now), "stale-amber")
+        self.assertEqual(render.freshness_class(now - dt.timedelta(hours=2), now), "")
+
+    def test_restaurant_location_and_waiting_and_defaults(self):
+        today = dt.date(2026, 11, 7)
+        data = {
+            "items": [],
+            "calendar": [],
+            "restaurants": {"city": "Sample Harbor", "as_of": "", "eat": [{"name": "North Pier Cafe", "area": "Pier", "cuisine": "Soup", "price": "20 CAD", "why": "Fallback.", "map_url": "https://example.com/a"}], "delivery": []},
+            "restaurant_locations": [
+                {"name": "Bangkok", "from": "2026-10-01", "until": "2026-11-07", "currency": "THB", "eat": [{"name": "Old stop", "area": "Pier", "cuisine": "Noodles", "price": "100", "why": "Last day.", "map_url": "https://example.com/b"}], "delivery": []},
+                {"name": "Osaka", "from": "2026-11-07", "until": "2026-11-10", "currency": "JPY", "eat": [{"name": "Counter seat", "area": "Namba", "cuisine": "Grill", "price": "2000", "why": "New city.", "map_url": "https://example.com/c"}], "delivery": []},
+            ],
+            "waiting_on": [
+                {"id": "W-1", "who": "Demo Person", "what": "Sign the sample note", "since": "2026-10-01", "channel": "email", "url": "https://example.com/mail"},
+            ],
+        }
+        rates = {"cad_per": {"JPY": 0.01, "CAD": 1}}
+        html, _counts = render.render_main(data, fresh_state(), today=today, rates=rates, now=dt.datetime(2026, 11, 7, tzinfo=dt.timezone.utc))
+        self.assertIn("Counter seat", html)
+        self.assertNotIn("Old stop", html)
+        self.assertIn("about 20 CAD", html)
+        self.assertIn("wait hot", html)
+        self.assertIn("Sign the sample note", html)
+        bare = {"items": [], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
+        plain, _counts = render.render_main(bare, fresh_state())
+        self.assertIn("Question the requirement", plain)
+        self.assertIn("Delete candidates", plain)
+
+    def test_fx_pairs_from_valet_shape(self):
+        import fxrates
+        payload = {"observations": [{"d": "2026-10-30", "FXUSDCAD": {"v": "1.3960"}, "FXTHBCAD": {"v": "0.04135"}, "FXJPYCAD": {"v": "0.008870"}}]}
+        rates = fxrates._from_valet(payload)
+        rates["usd_per"] = fxrates.usd_per(rates["cad_per"])
+        self.assertAlmostEqual(rates["cad_per"]["THB"], 0.04135)
+        self.assertAlmostEqual(rates["usd_per"]["THB"], 0.04135 / 1.3960, places=6)
+        self.assertAlmostEqual(rates["usd_per"]["JPY"], 0.008870 / 1.3960, places=6)
+        self.assertEqual(rates["source"], "Bank of Canada Valet")
+
+
 if __name__ == "__main__":
     unittest.main()
