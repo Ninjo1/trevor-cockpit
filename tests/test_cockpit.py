@@ -21,7 +21,7 @@ sys.path.insert(0, ROOT)
 import render
 import store
 from actions import apply
-from auth import basic_ok, bearer_ok, const_eq
+from auth import basic_ok, bearer_ok, const_eq, origin_allowed
 from server import Server, make_handler
 from store import Config, atomic_write, fresh_state, save_state
 from validate import validate_data
@@ -159,6 +159,10 @@ class AuthTests(HttpCase):
         self.assertFalse(basic_ok(wrong_user, "trevor", "", digest))
         self.assertFalse(basic_ok(None, "trevor", "plain-secret", digest))
         self.assertFalse(basic_ok(good, "trevor", "", "not-a-hash"))
+        self.assertTrue(origin_allowed(None, "host", "https"))
+        self.assertTrue(origin_allowed("null", "127.0.0.1:8765", None, "same-origin"))
+        self.assertFalse(origin_allowed("null", "127.0.0.1:8765", None, "cross-site"))
+        self.assertFalse(origin_allowed("https://evil.example", "127.0.0.1:8765", "https"))
 
 
 def _serve(cfg):
@@ -469,9 +473,71 @@ class PageTests(unittest.TestCase):
         self.assertIn("apple-touch-icon", template)
         self.assertIn("apple-mobile-web-app-capable", template)
         self.assertIn("bankofcanada.ca", template)
-        clocks = render.clocks_html(dt.datetime(2026, 10, 30, 18, 0, tzinfo=dt.timezone.utc))
-        for city in ("Vancouver", "Chicago", "New York", "Netherlands", "Sweden", "Seoul", "Bangkok", "Tokyo"):
-            self.assertIn(city, clocks)
+        moment = dt.datetime(2026, 10, 30, 18, 0, tzinfo=dt.timezone.utc)
+        clocks = render.clocks_html(moment, env={"HOME_TZ": "Asia/Bangkok", "HOME_LABEL": "Bangkok"})
+        for city in ("Chicago", "New York", "Netherlands", "Sweden", "Seoul", "Tokyo"):
+            self.assertNotIn(city, clocks)
+        self.assertLess(clocks.find(">Bangkok<"), clocks.find(">Vancouver<"))
+        self.assertLess(clocks.find(">Vancouver<"), clocks.find(">San Diego<"))
+        self.assertLess(clocks.find(">San Diego<"), clocks.find(">Amsterdam<"))
+        self.assertIn("clk current", clocks)
+        self.assertEqual(clocks.count("data-tz="), 4)
+        self.assertIn('data-tz="Asia/Bangkok"', clocks)
+        self.assertIn('data-tz="America/Los_Angeles"', clocks)
+        self.assertIn("credentials: \"same-origin\"", template)
+        self.assertIn("location.assign", template)
+        self.assertIn("form.submit", template)
+
+    def test_zones_and_display_day(self):
+        zone, label = render.resolve_display({})
+        self.assertEqual(zone.key, "America/Vancouver")
+        self.assertEqual(label, "Vancouver")
+        zone, label = render.resolve_display({"HOME_TZ": "Asia/Bangkok"})
+        self.assertEqual(zone.key, "Asia/Bangkok")
+        self.assertEqual(label, "Bangkok")
+        zone, label = render.resolve_display({"HOME_TZ": "Asia/Bangkok", "DISPLAY_TZ": "Europe/Amsterdam"})
+        self.assertEqual(zone.key, "Europe/Amsterdam")
+        self.assertEqual(label, "Amsterdam")
+        zone, label = render.resolve_display({"DISPLAY_TZ": "Not/AZone", "HOME_TZ": "Asia/Bangkok"})
+        self.assertEqual(zone.key, "Asia/Bangkok")
+        zone, label = render.resolve_display({"DISPLAY_TZ": "Nope", "HOME_TZ": "Also/Nope"})
+        self.assertEqual(zone.key, "America/Vancouver")
+        home_label, home_key = render.home_clock({"HOME_TZ": "Asia/Bangkok"})
+        self.assertEqual((home_label, home_key), ("Bangkok", "Asia/Bangkok"))
+        home_label, home_key = render.home_clock({"HOME_TZ": "Asia/Bangkok", "HOME_LABEL": "Where I am"})
+        self.assertEqual(home_label, "Where I am")
+        home_label, home_key = render.home_clock({"HOME_TZ": "America/Argentina/Buenos_Aires"})
+        self.assertEqual(home_label, "Buenos Aires")
+        home_rows = render.clock_rows({})
+        self.assertEqual([row[1] for row in home_rows].count("America/Vancouver"), 1)
+        self.assertTrue(home_rows[0][3])
+        data = {
+            "generated_at": "2026-10-30T17:00:00Z",
+            "items": [],
+            "calendar": [{
+                "id": "z1",
+                "subject": "Zone check meeting",
+                "allDay": False,
+                "start": "2026-10-30T17:00:00Z",
+                "end": "2026-10-30T18:00:00Z",
+                "stale": False,
+            }],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+        bangkok, _counts = render.render_main(
+            data, fresh_state(), today=dt.date(2026, 10, 30),
+            zone=ZoneInfo("Asia/Bangkok"), zone_label="Bangkok",
+        )
+        self.assertIn("Tomorrow, Sat Oct 31", bangkok)
+        self.assertIn("12:00 AM", bangkok)
+        self.assertNotIn("Pacific", bangkok)
+        self.assertNotIn("Zone check meeting", bangkok.split("Tomorrow, Sat Oct 31")[0])
+        vancouver, _counts = render.render_main(
+            data, fresh_state(), today=dt.date(2026, 10, 30),
+            zone=ZoneInfo("America/Vancouver"), zone_label="Vancouver",
+        )
+        self.assertIn("10:00 AM", vancouver)
+        self.assertIn("Zone check meeting", vancouver.split("Tomorrow, Sat Oct 31")[0])
 
     def test_repo_has_no_personal_mailboxes(self):
         banned = ("@trevorsmall.com", "@echandia.com", "@fifi4solutions.com", "NGROK_AUTHTOKEN", "store-f2dd5dab")

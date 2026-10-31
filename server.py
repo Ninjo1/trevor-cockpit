@@ -123,6 +123,7 @@ def make_handler(config):
                 self.headers.get("Origin"),
                 self.headers.get("X-Forwarded-Host") or self.headers.get("Host"),
                 self.headers.get("X-Forwarded-Proto"),
+                self.headers.get("Sec-Fetch-Site"),
             ):
                 return True
             self._json(403, {"ok": False, "error": "origin is not allowed"})

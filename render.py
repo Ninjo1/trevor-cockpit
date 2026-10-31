@@ -1,15 +1,26 @@
-"""Server-rendered cockpit page. The same HTML works with JavaScript off."""
+"""Server-rendered cockpit page. The same HTML works with JavaScript off.
+
+Clocks are Vancouver, San Diego, Amsterdam, and the current place from
+HOME_TZ / HOME_LABEL. Calendar times, due dates, and the refreshed line
+use DISPLAY_TZ, then HOME_TZ, then America/Vancouver.
+"""
 import datetime as dt
 import hashlib
 import html
+import os
 import re
 from urllib.parse import quote
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from actions import AREAS, area_of
 from textclean import clean_text
 
-PT = ZoneInfo("America/Vancouver")
+FALLBACK_ZONE = "America/Vancouver"
+FIXED_CLOCKS = (
+    ("Vancouver", "America/Vancouver"),
+    ("San Diego", "America/Los_Angeles"),
+    ("Amsterdam", "Europe/Amsterdam"),
+)
 CAL_WINDOW = 8  # today and the next 7 days
 FLIGHT = re.compile(
     r"\b(?:DL|UA|AC|WS|AA|AS|NH|KE|TG|JL|OZ|SQ|CX|BA|LH|AF|KL)\s?\d{2,4}\b|\bflight\b",
@@ -29,6 +40,58 @@ DIRECTIONS = {"owed_to_me": "Owed to you", "i_owe": "You owe"}
 
 e = lambda value: html.escape(clean_text(value), quote=True)
 e_raw = lambda value: html.escape("" if value is None else str(value), quote=True)
+
+
+def zone_city(iana):
+    """Last segment of an IANA name, with underscores as spaces."""
+    return str(iana).rstrip("/").split("/")[-1].replace("_", " ")
+
+
+def parse_zone(name):
+    text = (name or "").strip()
+    if not text:
+        return None
+    try:
+        return ZoneInfo(text)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return None
+
+
+def _env(env):
+    return os.environ if env is None else env
+
+
+def resolve_display(env=None):
+    """Return (zone, label). DISPLAY_TZ, else HOME_TZ, else Vancouver."""
+    env = _env(env)
+    chosen = parse_zone(env.get("DISPLAY_TZ")) or parse_zone(env.get("HOME_TZ")) or ZoneInfo(FALLBACK_ZONE)
+    key = getattr(chosen, "key", None) or FALLBACK_ZONE
+    return chosen, zone_city(key)
+
+
+def home_clock(env=None):
+    """Return (label, iana key) for the current-location clock."""
+    env = _env(env)
+    chosen = parse_zone(env.get("HOME_TZ")) or ZoneInfo(FALLBACK_ZONE)
+    key = getattr(chosen, "key", None) or FALLBACK_ZONE
+    label = (env.get("HOME_LABEL") or "").strip() or zone_city(key)
+    return label, key
+
+
+def clock_rows(env=None):
+    """Where you are, then Vancouver, San Diego, and Amsterdam.
+
+    A fixed city is skipped when it is the same zone as where you are, so
+    that clock is not shown twice. With HOME_TZ set to somewhere else, all
+    four are shown and the current place is first.
+    """
+    label, key = home_clock(env)
+    rows = [(label, key, "Here", True)]
+    for name, iana in FIXED_CLOCKS:
+        if iana == key:
+            continue
+        rows.append((name, iana, "", False))
+    return rows
 
 
 def utc(value):
@@ -331,7 +394,8 @@ def classify_clashes(events):
     return flight, overlap
 
 
-def calendar_html(data, today):
+def calendar_html(data, today, zone=None):
+    zone = zone or resolve_display()[0]
     events = [event for event in (data.get("calendar") or []) if isinstance(event, dict)]
     flight, overlap = classify_clashes(events)
     now = dt.datetime.now(dt.timezone.utc)
@@ -361,7 +425,7 @@ def calendar_html(data, today):
         same_day = []
         for event in timed:
             start = utc(event.get("start"))
-            if start and start.astimezone(PT).date() == day:
+            if start and start.astimezone(zone).date() == day:
                 same_day.append(event)
         same_day.sort(key=lambda event: event.get("start") or "")
         if not all_day and not same_day:
@@ -377,7 +441,7 @@ def calendar_html(data, today):
             if event.get("allDay"):
                 when = "All day"
             elif start and end:
-                when = f'{clock_time(start.astimezone(PT))}<small>to {clock_time(end.astimezone(PT))}</small>'
+                when = f'{clock_time(start.astimezone(zone))}<small>to {clock_time(end.astimezone(zone))}</small>'
             else:
                 when = e(event.get("start") or "")
             past = bool(end and not event.get("allDay") and end <= now)
@@ -656,8 +720,12 @@ def _snoozed(item, today):
     return bool(snooze and isinstance(snooze, str) and snooze > today.isoformat())
 
 
-def render_main(data, state, area="All", today=None):
-    today = today or dt.datetime.now(PT).date()
+def render_main(data, state, area="All", today=None, zone=None, zone_label=None):
+    if zone is None:
+        zone, zone_label = resolve_display()
+    elif not zone_label:
+        zone_label = zone_city(getattr(zone, "key", FALLBACK_ZONE))
+    today = today or dt.datetime.now(zone).date()
     area = area if area in AREAS else "All"
     rows = [item for item in merged(data, state) if area == "All" or item["area"] == area]
     emails = [item for item in rows if item.get("kind") in ("email", "draft")]
@@ -706,19 +774,19 @@ def render_main(data, state, area="All", today=None):
     if mail_done:
         html_out += f'<details class="keep"><summary>Handled mail ({len(mail_done)})</summary>' + list_html(mail_done, today, area, False) + "</details>"
     html_out += "</section>"
-    html_out += '<section id="calendar"><h2>Today and the next 7 days <small>Pacific</small></h2>'
-    html_out += calendar_html(data, today) + "</section>"
+    html_out += f'<section id="calendar"><h2>Today and the next 7 days <small>{e(zone_label)}</small></h2>'
+    html_out += calendar_html(data, today, zone) + "</section>"
     html_out += money_html(data, today, area)
     html_out += principles_html(data)
     html_out += numbers_html(data)
     generated = utc(data.get("generated_at")) if isinstance(data, dict) else None
     if generated:
-        local = generated.astimezone(PT)
+        local = generated.astimezone(zone)
         when = day_label(local.date()) + ", " + clock_time(local)
     else:
         when = "unknown"
     parts = [
-        f"Data refreshed {when} Pacific.",
+        f"Data refreshed {when} {zone_label}.",
         "Ticks stay on the server when data is refreshed.",
     ]
     for note in data.get("notes") or []:
@@ -736,20 +804,20 @@ def render_main(data, state, area="All", today=None):
     return html_out, counts
 
 
-def clocks_html(moment=None):
+def clocks_html(moment=None, env=None):
     moment = moment or dt.datetime.now(dt.timezone.utc)
     parts = []
-    for label, zone, subtitle, home in CLOCKS:
-        local = moment.astimezone(ZoneInfo(zone))
+    for label, zone_name, subtitle, current in clock_rows(env):
+        local = moment.astimezone(ZoneInfo(zone_name))
         hour = local.hour
         weekday = local.strftime("%a")
         open_now = 8 <= hour < 18 and weekday not in ("Sat", "Sun")
-        classes = "clk" + (" home" if home else "") + (" on" if open_now else "")
+        classes = "clk" + (" current" if current else "") + (" on" if open_now else "")
+        sub = f'<small class="sub">{e(subtitle)}</small>' if subtitle else ""
         parts.append(
-            f'<div class="{classes}" data-tz="{e_raw(zone)}"><b>{e(label)}</b>'
+            f'<div class="{classes}" data-tz="{e_raw(zone_name)}"><b>{e(label)}</b>'
             f'<span class="ct">{clock_time(local)}</span>'
-            f'<span class="cd">{e(day_label(local.date()))}</span>'
-            f'<small class="sub">{e(subtitle)}</small></div>'
+            f'<span class="cd">{e(day_label(local.date()))}</span>{sub}</div>'
         )
     return "".join(parts)
 
@@ -771,21 +839,28 @@ def fx_html(data):
     )
 
 
-def asof_html(data):
+def asof_html(data, zone=None, zone_label=None):
+    if zone is None:
+        zone, zone_label = resolve_display()
+    elif not zone_label:
+        zone_label = zone_city(getattr(zone, "key", FALLBACK_ZONE))
     generated = utc((data or {}).get("generated_at")) if isinstance(data, dict) else None
     if not generated:
-        return "Data time is not in this file. Times on the clocks are Pacific, Central, Eastern, and local."
-    local = generated.astimezone(PT)
+        return f"Data time is not in this file. Board times use {zone_label}. Clock times are local to each city."
+    local = generated.astimezone(zone)
     stamp = day_label(local.date()) + ", " + clock_time(local)
-    return f"Data as of {stamp} Pacific. Times below are local to each city."
+    return f"Data as of {stamp} {zone_label}. Clock times are local to each city."
 
 
-def fill(template, data, state, area="All", today=None):
-    main, counts = render_main(data, state, area, today=today)
+def fill(template, data, state, area="All", today=None, env=None):
+    zone, zone_label = resolve_display(env)
+    _label, home_key = home_clock(env)
+    main, counts = render_main(data, state, area, today=today, zone=zone, zone_label=zone_label)
     return (
         template.replace("<!--PRE_MAIN-->", main)
-        .replace("<!--PRE_CLOCKS-->", clocks_html())
+        .replace("<!--PRE_CLOCKS-->", clocks_html(env=env))
+        .replace("<!--PRE_HOME_TZ-->", e_raw(home_key))
         .replace("<!--PRE_COUNTS-->", e(counts))
         .replace("<!--PRE_FX-->", fx_html(data))
-        .replace("<!--PRE_ASOF-->", e(asof_html(data)))
+        .replace("<!--PRE_ASOF-->", e(asof_html(data, zone, zone_label)))
     )
