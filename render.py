@@ -1,8 +1,10 @@
 """Server-rendered cockpit page. The same HTML works with JavaScript off.
 
-Clocks are Vancouver, San Diego, Amsterdam, and the current place from
-HOME_TZ / HOME_LABEL. Calendar times, due dates, and the refreshed line
-use DISPLAY_TZ, then HOME_TZ, then America/Vancouver.
+Clocks are where you are, Vancouver, and Amsterdam. The browser marks the
+device zone Here. If that zone is unknown, the page uses today's payload
+location when it includes a time zone, then HOME_TZ. Vancouver is Home.
+Calendar times, due dates, and the refreshed line use DISPLAY_TZ, then
+HOME_TZ, then America/Vancouver.
 """
 import datetime as dt
 import hashlib
@@ -17,25 +19,11 @@ from actions import AREAS, area_of
 from textclean import clean_text
 
 FALLBACK_ZONE = "America/Vancouver"
-FIXED_CLOCKS = (
-    ("Vancouver", "America/Vancouver"),
-    ("San Diego", "America/Los_Angeles"),
-    ("Amsterdam", "Europe/Amsterdam"),
-)
+AMSTERDAM_ZONE = "Europe/Amsterdam"
 CAL_WINDOW = 8  # today and the next 7 days
 FLIGHT = re.compile(
     r"\b(?:DL|UA|AC|WS|AA|AS|NH|KE|TG|JL|OZ|SQ|CX|BA|LH|AF|KL)\s?\d{2,4}\b|\bflight\b",
     re.I,
-)
-CLOCKS = (
-    ("Vancouver", "America/Vancouver", "Home", True),
-    ("Chicago", "America/Chicago", "Central", False),
-    ("New York", "America/New_York", "Eastern", False),
-    ("Netherlands", "Europe/Amsterdam", "Europe", False),
-    ("Sweden", "Europe/Stockholm", "Europe", False),
-    ("Seoul", "Asia/Seoul", "Korea", False),
-    ("Bangkok", "Asia/Bangkok", "Thailand", False),
-    ("Tokyo", "Asia/Tokyo", "Japan", False),
 )
 DIRECTIONS = {"owed_to_me": "Owed to you", "i_owe": "You owe"}
 
@@ -79,20 +67,84 @@ def home_clock(env=None):
     return label, key
 
 
-def clock_rows(env=None):
-    """Where you are, then Vancouver, San Diego, and Amsterdam.
+def _place_zone(loc):
+    """Return (city label, IANA key) when a payload place names a real zone."""
+    if isinstance(loc, str):
+        zone = parse_zone(loc)
+        if not zone:
+            return None
+        key = getattr(zone, "key", None) or loc.strip()
+        return zone_city(key), key
+    if not isinstance(loc, dict):
+        return None
+    zone = parse_zone(loc.get("tz") or loc.get("zone") or loc.get("timezone"))
+    if not zone:
+        return None
+    key = getattr(zone, "key", None) or ""
+    label = (loc.get("label") or loc.get("name") or loc.get("city") or "").strip() or zone_city(key)
+    return label, key
 
-    A fixed city is skipped when it is the same zone as where you are, so
-    that clock is not shown twice. With HOME_TZ set to somewhere else, all
-    four are shown and the current place is first.
+
+def payload_here(data, today=None):
+    """City for today from the payload, when that place includes a time zone.
+
+    A restaurant location whose dates contain today wins. Otherwise a
+    top-level location or here object is used. A name alone is not enough.
     """
-    label, key = home_clock(env)
-    rows = [(label, key, "Here", True)]
-    for name, iana in FIXED_CLOCKS:
-        if iana == key:
+    if not isinstance(data, dict):
+        return None
+    day = today or dt.datetime.now(dt.timezone.utc).date()
+    iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
+    locs = data.get("restaurant_locations") if isinstance(data.get("restaurant_locations"), list) else []
+    matches = []
+    for loc in locs:
+        if not isinstance(loc, dict):
             continue
-        rows.append((name, iana, "", False))
-    return rows
+        start = str(loc.get("from") or "0001-01-01")
+        until = str(loc.get("until") or "9999-12-31")
+        if start <= iso <= until:
+            parsed = _place_zone(loc)
+            if parsed:
+                matches.append((start, parsed))
+    if matches:
+        matches.sort(key=lambda item: item[0], reverse=True)
+        return matches[0][1]
+    return _place_zone(data.get("location")) or _place_zone(data.get("here"))
+
+
+def here_fallback(env=None, data=None, today=None):
+    """Where you are when the device zone is unknown."""
+    found = payload_here(data, today)
+    if found:
+        return found
+    env = _env(env)
+    if parse_zone(env.get("HOME_TZ")):
+        return home_clock(env)
+    return "Vancouver", FALLBACK_ZONE
+
+
+def clock_rows(env=None, data=None, today=None):
+    """Here, then Vancouver (Home), then Amsterdam.
+
+    Each row is (city, iana, mark, current, role). If Here is Vancouver or
+    Amsterdam, that clock is not repeated. It is marked Here instead.
+    """
+    label, key = here_fallback(env, data, today)
+    if key == FALLBACK_ZONE:
+        return [
+            ("Vancouver", FALLBACK_ZONE, "Here", True, "here home"),
+            ("Amsterdam", AMSTERDAM_ZONE, "", False, "amsterdam"),
+        ]
+    if key == AMSTERDAM_ZONE:
+        return [
+            ("Amsterdam", AMSTERDAM_ZONE, "Here", True, "here amsterdam"),
+            ("Vancouver", FALLBACK_ZONE, "Home", False, "home"),
+        ]
+    return [
+        (label, key, "Here", True, "here"),
+        ("Vancouver", FALLBACK_ZONE, "Home", False, "home"),
+        ("Amsterdam", AMSTERDAM_ZONE, "", False, "amsterdam"),
+    ]
 
 
 def utc(value):
@@ -718,9 +770,7 @@ def today_meetings_card(data, zone, zone_label, now):
             f'<div class="meet"><div class="tm">{when}{van}</div>'
             f'<div class="ttl">{title}</div>{join}</div>'
         )
-    return (
-        f'<article class="card glance-card" id="today-meet"><h2>Today <small>{e(zone_label)}</small></h2>{body}</article>'
-    )
+    return body
 
 
 def upgrades_card(data, zone):
@@ -779,7 +829,6 @@ def glance_html(data, zone, zone_label, weather=None, now=None):
         cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}]))
     if isinstance(data, dict):
         cards.append(travel_card(data, zone, zone_label, now))
-        cards.append(today_meetings_card(data, zone, zone_label, now))
         cards.append(upgrades_card(data, zone))
     cards = [card for card in cards if card]
     if not cards:
@@ -1196,7 +1245,7 @@ def jarvis_html(data, tasks, today):
 def quadrant_html(items, today, area, group):
     dated = [item for item in items if item.get("due")]
     undated = [item for item in items if not item.get("due")]
-    html_out = list_html(dated, today, area, group) if dated else '<p class="empty">Nothing dated.</p>'
+    html_out = list_html(dated, today, area, group) if dated else ""
     if undated:
         html_out += (
             f'<details class="keep"><summary>Undated ({len(undated)})</summary>'
@@ -1206,22 +1255,25 @@ def quadrant_html(items, today, area, group):
     return html_out
 
 
-def eisenhower_html(tasks, today, area, group):
+def quadrant_block(key, rows, today, area, group):
+    if not rows:
+        return f'<p class="quad-line" id="quadrant-{key}">{e(QUAD_LABELS[key])}: nothing.</p>'
+    return (
+        f'<section class="quad q-{key}" id="quadrant-{key}">'
+        f'<h2>{e(QUAD_LABELS[key])} <small>{len(rows)}</small></h2>'
+        + quadrant_html(rows, today, area, group)
+        + "</section>"
+    )
+
+
+def eisenhower_blocks(tasks, today, area, group):
     buckets = {key: [] for key in QUADRANTS}
     for item in tasks:
         resolved = derive_quadrant(item, today)
         item["quadrant_resolved"] = resolved
         buckets[resolved].append(item)
-    blocks = ""
-    for key in QUADRANTS:
-        rows = buckets[key]
-        blocks += (
-            f'<section class="quad q-{key}" id="quadrant-{key}">'
-            f'<h2>{e(QUAD_LABELS[key])} <small>{len(rows)}</small></h2>'
-            + quadrant_html(rows, today, area, group)
-            + "</section>"
-        )
-    return f'<div class="quads">{blocks}</div>', len(buckets["delete"])
+    blocks = {key: quadrant_block(key, buckets[key], today, area, group) for key in QUADRANTS}
+    return blocks, len(buckets["delete"])
 
 
 def waiting_html(data, state, today, area):
@@ -1259,8 +1311,8 @@ def waiting_html(data, state, today, area):
             days = None
         rows.append((-(days if days is not None else -9999), days, row, overlay))
     rows.sort(key=lambda item: item[0])
-    if not rows and source is None and not raw_rows:
-        return ""
+    if not rows:
+        return '<p class="quad-line" id="waiting-on">Waiting on: nothing.</p>'
     body = ""
     for _key, days, row, overlay in rows:
         hot = " hot" if days is not None and days > 5 else ""
@@ -1284,12 +1336,10 @@ def waiting_html(data, state, today, area):
             f'<label>Back on<input type="date" name="until" value="{e_raw(overlay.get("snooze") or "")}"></label>'
             f'<button class="btn" type="submit">Snooze</button></form></details></div></li>'
         )
-    if not body:
-        body = '<p class="empty">Nothing you are waiting on.</p>'
-        inner = body
-    else:
-        inner = "<ul>" + body + "</ul>"
-    return f'<section id="waiting-on"><h2>Waiting on <small>{len(rows)}</small></h2>{inner}</section>'
+    return (
+        f'<section id="waiting-on"><h2>Waiting on <small>{len(rows)}</small></h2>'
+        f'<ul>{body}</ul></section>'
+    )
 
 
 def render_main(data, state, area="All", today=None, zone=None, zone_label=None, weather=None, now=None, rates=None):
@@ -1318,24 +1368,28 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
     active_tasks = [item for item in active if item.get("section") != "waiting"]
     for item in active_tasks:
         item["quadrant_resolved"] = derive_quadrant(item, today)
-    quads, delete_count = eisenhower_html(active_tasks, today, area, group)
-    html_out = jarvis_html(data, active_tasks, today)
-    html_out += chips_html(area)
+    blocks, delete_count = eisenhower_blocks(active_tasks, today, area, group)
+    jarvis = jarvis_html(data, active_tasks, today)
+    html_out = f'<div class="home-top">{blocks["do_now"]}{waiting_html(data, state, today, area)}</div>'
+    html_out += (
+        f'<div class="quad-rest">{blocks["schedule"]}{blocks["delegate"]}{blocks["delete"]}</div>'
+    )
+    meetings = today_meetings_card(data, zone, zone_label, clock)
+    html_out += f'<section id="calendar"><h2>Today\'s calendar <small>{e(zone_label)}</small></h2>'
+    html_out += meetings if meetings else '<p class="empty">Nothing on today.</p>'
+    html_out += f'<h2>Today and the next 7 days <small>{e(zone_label)}</small></h2>'
+    html_out += calendar_html(data, today, zone, zone_label) + "</section>"
+    html_out += restaurants_html(data, today, rates)
     html_out += glance_html(data, zone, zone_label, weather=weather, now=clock)
-    html_out += quads
-    html_out += add_form(area)
-    if snoozed:
-        html_out += f'<details class="keep"><summary>Snoozed ({len(snoozed)})</summary>' + list_html(snoozed, today, area, False) + "</details>"
-    html_out += f'<details id="donebox" class="keep"><summary>Done ({len(done)})</summary>' + list_html(done, today, area, False) + "</details>"
-    html_out += waiting_html(data, state, today, area)
     html_out += f'<section id="emails"><h2>Emails waiting <small>{len(mail_live)}</small></h2>'
     html_out += list_html(mail_live, today, area, group)
     if mail_done:
         html_out += f'<details class="keep"><summary>Handled mail ({len(mail_done)})</summary>' + list_html(mail_done, today, area, False) + "</details>"
     html_out += "</section>"
-    html_out += restaurants_html(data, today, rates)
-    html_out += f'<section id="calendar"><h2>Today and the next 7 days <small>{e(zone_label)}</small></h2>'
-    html_out += calendar_html(data, today, zone, zone_label) + "</section>"
+    html_out += add_form(area)
+    if snoozed:
+        html_out += f'<details class="keep"><summary>Snoozed ({len(snoozed)})</summary>' + list_html(snoozed, today, area, False) + "</details>"
+    html_out += f'<details id="donebox" class="keep"><summary>Done ({len(done)})</summary>' + list_html(done, today, area, False) + "</details>"
     html_out += money_html(data, today, area)
     html_out += principles_html(data, delete_count)
     generated = utc(data.get("generated_at")) if isinstance(data, dict) else None
@@ -1361,41 +1415,59 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
     html_out += "<footer>" + e(" ".join(parts)) + "</footer>"
     do_now_count = sum(1 for item in active_tasks if item.get("quadrant_resolved") == "do_now")
     counts = f"{do_now_count} now, {len(mail_live)} email, {len(done)} done"
-    return html_out, counts
+    return html_out, counts, jarvis
 
 
-def clocks_html(moment=None, env=None):
+def clocks_html(moment=None, env=None, data=None, today=None):
     moment = moment or dt.datetime.now(dt.timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
     parts = []
-    for label, zone_name, subtitle, current in clock_rows(env):
+    for label, zone_name, mark, current, role in clock_rows(env, data, today):
         local = moment.astimezone(ZoneInfo(zone_name))
         hour = local.hour
         weekday = local.strftime("%a")
         open_now = 8 <= hour < 18 and weekday not in ("Sat", "Sun")
         classes = "clk" + (" current" if current else "") + (" on" if open_now else "")
-        sub = f'<small class="sub">{e(subtitle)}</small>' if subtitle else ""
+        role_html = f'<span class="role">{e(mark)}</span>' if mark else ""
         parts.append(
-            f'<div class="{classes}" data-tz="{e_raw(zone_name)}"><b>{e(label)}</b>'
+            f'<div class="{classes}" data-tz="{e_raw(zone_name)}" data-role="{e_raw(role)}">'
+            f'<b>{e(label)}</b>'
             f'<span class="ct">{clock_time(local)}</span>'
-            f'<span class="cd">{e(day_label(local.date()))}</span>{sub}</div>'
+            f'<span class="cd">{e(day_label(local.date()))}</span>{role_html}</div>'
         )
     return "".join(parts)
 
 
-def fx_html(data):
+def _fx_pair(code, rates):
+    cad = (rates or {}).get("cad_per") or {}
+    try:
+        value = float(cad.get(code))
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    shown = f"{value:.6f}".rstrip("0").rstrip(".")
+    return f' <span class="fxpair">{e(code)} to CAD <b id="fx{code.lower()}">{e(shown)}</b></span>'
+
+
+def fx_html(data, rates=None):
     view = fx_view(data or {})
+    pairs = _fx_pair("THB", rates) + _fx_pair("JPY", rates)
     if not view:
         return (
             '<p class="fxline" id="fxchip" data-rate="" data-asof="" data-source="">'
             'USD to CAD <b id="fxr">unavailable</b>'
-            ' · <span id="fxd"></span> · <span id="fxs">Bank of Canada Valet loads when this page is online.</span></p>'
+            + pairs
+            + ' <span id="fxd"></span> <span id="fxs">Bank of Canada Valet loads when this page is online.</span></p>'
         )
     rate = f"{view['rate']:.4f}"
     return (
         f'<p class="fxline" id="fxchip" data-rate="{e_raw(rate)}" data-asof="{e_raw(view["as_of"])}" '
         f'data-source="{e(view["source"])}">USD to CAD <b id="fxr">{e(rate)}</b>'
-        f' · <span id="fxd">{e(view["as_of"])}</span>'
-        f' · <span id="fxs">{e(view["source"])}</span></p>'
+        + pairs
+        + f' <span id="fxd">{e(view["as_of"])}</span>'
+        f' <span id="fxs">{e(view["source"])}</span></p>'
     )
 
 
@@ -1421,17 +1493,22 @@ def fill(template, data, state, area="All", today=None, env=None, weather=None, 
     zone, zone_label = resolve_display(env)
     _label, home_key = home_clock(env)
     moment = now or dt.datetime.now(dt.timezone.utc)
-    main, counts = render_main(
+    if getattr(moment, "tzinfo", None) is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    main, counts, jarvis = render_main(
         data, state, area, today=today, zone=zone, zone_label=zone_label, weather=weather, now=moment, rates=rates
     )
+    clock_day = today or moment.astimezone(zone).date()
     generated = utc((data or {}).get("generated_at")) if isinstance(data, dict) else None
     fresh = freshness_class(generated, moment if getattr(moment, "tzinfo", None) else None)
     return (
         template.replace("<!--PRE_MAIN-->", main)
-        .replace("<!--PRE_CLOCKS-->", clocks_html(env=env))
+        .replace("<!--PRE_JARVIS-->", jarvis)
+        .replace("<!--PRE_CHIPS-->", chips_html(area))
+        .replace("<!--PRE_CLOCKS-->", clocks_html(moment, env=env, data=data, today=clock_day))
         .replace("<!--PRE_HOME_TZ-->", e_raw(home_key))
         .replace("<!--PRE_COUNTS-->", e(counts))
-        .replace("<!--PRE_FX-->", fx_html(data))
+        .replace("<!--PRE_FX-->", fx_html(data, rates))
         .replace("<!--PRE_ASOF-->", e(asof_html(data, zone, zone_label)))
         .replace("<!--PRE_FRESH-->", e_raw(fresh))
         .replace("<!--PRE_FX_JSON-->", json_for_script(rates))

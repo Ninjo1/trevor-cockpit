@@ -82,25 +82,36 @@ h1 { font-size: 20px; letter-spacing: 0.04em; margin: 0; font-weight: 750; }
   font-weight: 650; cursor: pointer;
 }
 #undo[hidden] { display: none; }
-.meta, .clknote { color: var(--m); font-size: 14px; margin: 8px 0 0; }
-.fxline { color: var(--c); font-size: 15px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
-.fxline b { font-size: 18px; }
+.meta { color: var(--m); font-size: 14px; margin: 8px 0 0; }
+.fxrow {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 8px;
+}
+.fxline { color: var(--c); font-size: 14px; margin: 0; font-variant-numeric: tabular-nums; }
+.fxline b { font-size: 15px; }
+.fxpair { margin-left: 8px; }
 .stale-amber { color: var(--a); font-weight: 750; }
 .stale-red { color: var(--r); font-weight: 750; }
-.fxconv { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 8px; }
-.fxconv label { min-width: 88px; }
-.fxconv output { min-height: 44px; display: inline-flex; align-items: center; font-weight: 750; }
-.jarvis { border: 1px solid var(--l); border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; background: var(--p); }
+.fxconv { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
+.fxconv label {
+  min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 700;
+}
+.fxconv input, .fxconv select { width: auto; min-height: 32px; height: 32px; padding: 2px 8px; }
+.fxconv input { width: 5.5rem; }
+.fxconv output { min-height: 32px; display: inline-flex; align-items: center; font-weight: 750; font-size: 14px; }
+.jarvis { border: 1px solid var(--l); border-radius: 12px; padding: 8px 10px; margin: 10px 0 0; background: var(--p); }
 .jarvis .lab { display: block; }
-.jarvis .fire, .jarvis .decide { margin: 4px 0; }
+.jarvis .fire, .jarvis .decide { margin: 2px 0; }
 .kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
-.kpi { border-top: 3px solid var(--m); border-radius: 8px; padding: 8px; background: var(--bg); }
+.kpi { border-top: 3px solid var(--m); border-radius: 8px; padding: 6px 8px; background: var(--bg); }
 .kpi.red { border-top-color: var(--r); }
 .kpi.amber { border-top-color: var(--a); }
 .kpi.green { border-top-color: var(--g); }
-.kpi .nv { font-size: 20px; }
-.quads { display: grid; gap: 10px; }
-.quad { border: 1px solid var(--l); border-radius: 12px; padding: 4px 10px 10px; }
+.kpi .nv { font-size: 18px; }
+.home-top, .quad-rest { display: grid; gap: 8px; align-items: start; }
+.quad-line { margin: 0; padding: 2px 0; color: var(--m); font-size: 14px; }
+.quad { border: 1px solid var(--l); border-radius: 12px; padding: 2px 10px 8px; }
+.home-top h2, .quad-rest h2, #calendar h2 { margin-top: 8px; }
 .q-do_now { border-color: var(--r); }
 .q-schedule { border-color: var(--c); }
 .q-delegate { border-color: var(--a); }
@@ -108,15 +119,29 @@ h1 { font-size: 20px; letter-spacing: 0.04em; margin: 0; font-weight: 750; }
 li.wait.hot { border-left: 3px solid var(--r); padding-left: 8px; }
 form.move { display: flex; gap: 8px; align-items: center; }
 form.move select { min-height: 44px; }
-.clocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-.clk { background: var(--p); border: 1px solid var(--l); border-radius: 12px; padding: 8px 10px; min-width: 0; }
+.clocks {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px; margin-top: 8px;
+}
+.clk {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0; min-width: 0;
+  background: var(--p); border: 1px solid var(--l); border-radius: 10px; padding: 4px 8px;
+}
+@media (min-width: 720px) {
+  .clocks { display: flex; grid-template-columns: none; flex-wrap: nowrap; overflow: visible; }
+  .clk {
+    flex-direction: row; align-items: baseline; gap: 6px; width: auto;
+    border-radius: 999px; padding: 3px 10px;
+  }
+}
 .clk.on { border-color: var(--g); }
-.clk.current { border-color: var(--c); box-shadow: inset 0 0 0 1px var(--c); }
-.clk.current b { color: var(--c); }
-.clk.device { border-style: dashed; }
-.clk b { display: block; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--m); font-weight: 700; }
-.ct { display: block; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; margin-top: 2px; }
-.cd, .sub { display: block; color: var(--m); font-size: 13px; }
+.clk.current { border-color: var(--c); }
+.clk.current b, .clk.current .role { color: var(--c); }
+.clk b { display: inline; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--m); font-weight: 700; }
+.ct { display: inline; font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums; margin: 0; }
+.cd, .role { display: inline; color: var(--m); font-size: 12px; }
+.role { font-weight: 750; }
+#status #chips { padding: 0; flex: 1 1 auto; }
 #status {
   position: sticky; top: 0; z-index: 5;
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -270,21 +295,22 @@ details.pr { border: 1px solid var(--l); border-radius: 12px; padding: 0 14px 8p
 .nv { font-size: 22px; font-weight: 800; }
 footer { margin-top: 28px; font-size: 14px; }
 .busy { opacity: 0.45; pointer-events: none; }
+@media (min-width: 390px) {
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (min-width: 720px) {
   body { font-size: 17px; }
   h1 { font-size: 24px; }
-  .clocks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .ct { font-size: 24px; }
   form.add { grid-template-columns: 1fr 160px 170px auto; align-items: end; }
-  .cards, .prg, .glance, .quads { grid-template-columns: 1fr 1fr; }
+  .cards, .prg, .glance { grid-template-columns: 1fr 1fr; }
+  .home-top { grid-template-columns: 1fr 1fr; }
+  .quad-rest { grid-template-columns: 1fr 1fr 1fr; }
   .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .days { grid-template-columns: 1fr 1fr; }
   .nums { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
 @media (min-width: 1100px) {
-  .clocks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .days { grid-template-columns: 1fr 1fr 1fr; }
-  .ct { font-size: 22px; }
 }
 </style>
 </head>
@@ -297,19 +323,22 @@ footer { margin-top: 28px; font-size: 14px; }
       <a class="tool" href="/logout">Sign out</a>
     </div>
   </div>
+  <!--PRE_JARVIS-->
   <p class="meta <!--PRE_FRESH-->" id="asof"><!--PRE_ASOF--></p>
-  <!--PRE_FX-->
-  <form id="fxconv" class="fxconv" action="#" autocomplete="off">
-    <label>Amount<input id="fxamt" type="number" min="0" step="0.01" value="100"></label>
-    <label>From<select id="fxfrom"><option>THB</option><option>JPY</option><option>USD</option><option selected>CAD</option></select></label>
-    <label>To<select id="fxto"><option>THB</option><option>JPY</option><option selected>USD</option><option>CAD</option></select></label>
-    <output id="fxout" for="fxamt">-</output>
-  </form>
+  <div class="fxrow">
+    <!--PRE_FX-->
+    <form id="fxconv" class="fxconv" action="#" autocomplete="off">
+      <label>Amount<input id="fxamt" type="number" min="0" step="0.01" value="100"></label>
+      <label>From<select id="fxfrom"><option>THB</option><option>JPY</option><option>USD</option><option selected>CAD</option></select></label>
+      <label>To<select id="fxto"><option>THB</option><option>JPY</option><option selected>USD</option><option>CAD</option></select></label>
+      <output id="fxout" for="fxamt">-</output>
+    </form>
+  </div>
   <script type="application/json" id="fx-rates"><!--PRE_FX_JSON--></script>
   <div class="clocks" id="clocks" data-home-tz="<!--PRE_HOME_TZ-->"><!--PRE_CLOCKS--></div>
-  <p class="clknote">Clocks show the time this page was built, then update while it stays open.</p>
 </header>
 <div id="status">
+  <!--PRE_CHIPS-->
   <span id="counts"><!--PRE_COUNTS--></span>
   <span id="save" role="status"></span>
   <button id="undo" type="button" hidden>Undo</button>
@@ -345,6 +374,10 @@ footer { margin-top: 28px; font-size: 14px; }
     const body = await res.json();
     app.innerHTML = body.main;
     byId("counts").textContent = body.counts;
+    if (body.jarvis) {
+      const strip = byId("jarvis");
+      if (strip) strip.outerHTML = body.jarvis;
+    }
     app.querySelectorAll("details.keep").forEach((node, index) => {
       if (index < keep.length) node.open = keep[index];
     });
@@ -352,6 +385,7 @@ footer { margin-top: 28px; font-size: 14px; }
 
   async function applyArea(next, fallbackHref) {
     area = next;
+    paintChips();
     try { localStorage.setItem("cockpit-area", next); } catch (err) {}
     try {
       await refresh();
@@ -376,7 +410,13 @@ footer { margin-top: 28px; font-size: 14px; }
     return res.json();
   }
 
-  app.addEventListener("click", (ev) => {
+  function paintChips() {
+    document.querySelectorAll("#chips a.chip").forEach((node) => {
+      node.classList.toggle("on", node.dataset.area === area);
+    });
+  }
+
+  document.addEventListener("click", (ev) => {
     const chip = ev.target.closest("a.chip");
     if (!chip) return;
     ev.preventDefault();
@@ -466,29 +506,94 @@ footer { margin-top: 28px; font-size: 14px; }
     });
   }
 
+  function deviceZone() {
+    let detected = "";
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (err) { return ""; }
+    const upper = detected.toUpperCase();
+    if (!detected || upper === "UTC" || upper === "ETC/UTC" || upper === "ETC/GMT" || upper === "GMT") return "";
+    try {
+      Intl.DateTimeFormat("en-US", { timeZone: detected }).format(new Date());
+    } catch (err) {
+      return "";
+    }
+    return detected;
+  }
+
+  function zoneCity(zone) {
+    return (zone.split("/").pop() || zone).replace(/_/g, " ");
+  }
+
+  function setClockRole(node, text) {
+    let role = node.querySelector(".role");
+    if (!text) {
+      if (role) role.remove();
+      return;
+    }
+    if (!role) {
+      role = document.createElement("span");
+      role.className = "role";
+      node.appendChild(role);
+    }
+    role.textContent = text;
+  }
+
+  function roleList(node) {
+    return (node.dataset.role || "").split(/\s+/).filter(Boolean);
+  }
+
   function ensureDeviceClock() {
     const box = byId("clocks");
     if (!box) return;
-    const home = box.dataset.homeTz || "";
-    let detected = "";
-    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (err) { return; }
-    if (!detected || detected === home) return;
-    const already = [...box.querySelectorAll(".clk")].some((node) => node.dataset.tz === detected);
-    if (already) return;
+    const detected = deviceZone();
+    if (!detected) return;
+    const chips = () => [...box.querySelectorAll(".clk")];
+
+    function releaseHere(node) {
+      const roles = roleList(node).filter((role) => role !== "here");
+      node.classList.remove("current");
+      if (!roles.length) {
+        node.remove();
+        return;
+      }
+      node.dataset.role = roles.join(" ");
+      if (roles.includes("home")) setClockRole(node, "Home");
+      else setClockRole(node, "");
+    }
+
+    const match = chips().find((node) => node.dataset.tz === detected);
+    if (match) {
+      chips().forEach((node) => {
+        if (node !== match && roleList(node).includes("here")) releaseHere(node);
+      });
+      const roles = new Set(roleList(match));
+      roles.add("here");
+      match.dataset.role = [...roles].join(" ");
+      match.classList.add("current");
+      setClockRole(match, "Here");
+      chips().forEach((node) => {
+        if (node !== match) node.classList.remove("current");
+      });
+      return;
+    }
+
+    chips().forEach((node) => {
+      if (roleList(node).includes("here")) releaseHere(node);
+    });
     const card = document.createElement("div");
-    card.className = "clk device";
+    card.className = "clk current";
     card.dataset.tz = detected;
+    card.dataset.role = "here";
     const name = document.createElement("b");
-    name.textContent = detected.split("/").pop().replace(/_/g, " ");
+    name.textContent = zoneCity(detected);
     const time = document.createElement("span");
     time.className = "ct";
     const day = document.createElement("span");
     day.className = "cd";
-    const sub = document.createElement("small");
-    sub.className = "sub";
-    sub.textContent = "This device";
-    card.append(name, time, day, sub);
-    box.appendChild(card);
+    const role = document.createElement("span");
+    role.className = "role";
+    role.textContent = "Here";
+    card.append(name, time, day, role);
+    box.insertBefore(card, box.firstChild);
   }
   ensureDeviceClock();
   tick();

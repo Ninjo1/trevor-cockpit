@@ -50,7 +50,7 @@ def check(base, user, password):
     report["page"] = status
     text = visible(page)
     report["has_restaurants"] = "North Pier Cafe" in page or "Restaurants" in page
-    report["has_clocks"] = "Vancouver" in page and "Tokyo" in page
+    report["has_clocks"] = "Vancouver" in page and "Amsterdam" in page and "San Diego" not in page
     report["has_fx"] = "USD to CAD" in page
     report["has_principles"] = "Principles" in page
     report["has_emails"] = "Emails waiting" in page

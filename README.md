@@ -36,13 +36,13 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
-| `HOME_TZ` | Render dashboard | IANA zone for the first clock, marked as where you are. Example: `Asia/Bangkok` |
-| `HOME_LABEL` | Render dashboard, optional | Name on that clock. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
+| `HOME_TZ` | Render dashboard | Fallback IANA zone for the Here clock when the device zone is unknown and the payload has no location for today. Example: `Asia/Bangkok` |
+| `HOME_LABEL` | Render dashboard, optional | City name for that fallback. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
 | `DISPLAY_TZ` | Render dashboard | Zone for calendar times, which day an event falls on, due badges, and the refreshed line. If empty, `HOME_TZ` is used, then `America/Vancouver` |
 
 One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
 
-The board always shows four clocks: where you are (`HOME_TZ`), Vancouver, San Diego, and Amsterdam. The first one is the current place. If the browser's zone is different and is not already one of those clocks, the page adds it as "This device". `HOME_TZ` stays the source of truth for where you are. These three variables are already set on the running service. This repo does not change them.
+The board shows three slim clocks in one row: where you are, Vancouver, and Amsterdam. Where you are uses the device time zone and is marked Here. If the device zone is unknown, the page uses today's payload location when that place includes a time zone, then `HOME_TZ`. Vancouver is marked Home. Amsterdam is the third clock. San Diego is not shown. If where you are is already Vancouver or Amsterdam, that clock is marked Here and is not repeated. These three variables are already set on the running service. This repo does not change them.
 
 Local run:
 
@@ -149,7 +149,7 @@ A scheduled job can post this shape. Omit a key to hide that card. `quadrant` ma
 
 `waiting_on` is mail you sent or decisions other people owe you: `who`, `what`, `since` (`YYYY-MM-DD`), `channel` (`email`, `meeting`, or `slack`), `url`, and `id`. Rows older than 5 days are highlighted.
 
-`restaurant_locations` is a list of `{name, from, until, currency, eat, delivery}`. The page shows the range that contains today. `from` and `until` are inclusive. Prices in THB or JPY also show an approximate CAD figure from the live rate. If this list is absent, the flat `restaurants` object is used.
+`restaurant_locations` is a list of `{name, from, until, currency, eat, delivery}`. Optional `tz` is an IANA zone. The page shows the range that contains today. `from` and `until` are inclusive. Prices in THB or JPY also show an approximate CAD figure from the live rate. If this list is absent, the flat `restaurants` object is used. When the browser cannot read a device zone, a location for today that includes `tz` (or a top-level `location` object with `name` and `tz`) is the Here clock. Otherwise `HOME_TZ` is used.
 
 `jarvis.on_fire` and `jarvis.decision` are the two lines at the top. `jarvis.numbers` or `numbers` supplies up to five figures. Each number may set `status` to `red`, `amber`, or `green`.
 

@@ -230,11 +230,11 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     state = load_state(self.cfg)
                 forecasts = self._forecasts(data)
                 rates = self._rates(data)
-                main, counts = render.render_main(data, state, self._area(), weather=forecasts, rates=rates)
+                main, counts, jarvis = render.render_main(data, state, self._area(), weather=forecasts, rates=rates)
             except StateError as ex:
                 self._json(500, {"ok": False, "error": str(ex)})
                 return
-            self._json(200, {"main": main, "counts": counts})
+            self._json(200, {"main": main, "counts": counts, "jarvis": jarvis})
 
         def _ingest(self):
             if not self.cfg.ingest_token:
