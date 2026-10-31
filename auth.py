@@ -73,11 +73,17 @@ def bearer_ok(header, token):
     return const_eq(presented, token.encode("utf-8"))
 
 
-def origin_allowed(origin, host, forwarded_proto):
-    """Allow missing Origin (curl) and same-host browser Origins only."""
-    if not origin:
-        return True
-    if origin == "null" or not host:
+def origin_allowed(origin, host, forwarded_proto, fetch_site=""):
+    """Allow missing Origin (curl) and same-host browser Origins only.
+
+    WebKit sends Origin: null on a same-origin form POST. That is allowed
+    unless the browser also says the fetch site is cross-site. A normal
+    cross-site form still sends the other site's origin and is refused.
+    """
+    site = (fetch_site or "").split(",")[0].strip().lower()
+    if not origin or origin == "null":
+        return site != "cross-site"
+    if not host:
         return False
     host = host.split(",")[0].strip()
     schemes = {"https", "http"}

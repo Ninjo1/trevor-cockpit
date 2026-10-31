@@ -36,8 +36,13 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
+| `HOME_TZ` | Render dashboard | IANA zone for the first clock, marked as where you are. Example: `Asia/Bangkok` |
+| `HOME_LABEL` | Render dashboard, optional | Name on that clock. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
+| `DISPLAY_TZ` | Render dashboard | Zone for calendar times, which day an event falls on, due badges, and the refreshed line. If empty, `HOME_TZ` is used, then `America/Vancouver` |
 
 One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
+
+The board always shows four clocks: where you are (`HOME_TZ`), Vancouver, San Diego, and Amsterdam. The first one is the current place. If the browser's zone is different and is not already one of those clocks, the page adds it as "This device". `HOME_TZ` stays the source of truth for where you are. These three variables are already set on the running service. This repo does not change them.
 
 Local run:
 
@@ -80,7 +85,7 @@ The same call accepts `-u trevor:$BASIC_AUTH_PASS`. The body is `todos`, `custom
 | File | Contents |
 | --- | --- |
 | `/var/data/state.json` | Ticks, custom tasks, edits, snoozes, handled mail |
-| `/var/data/backups/state-YYYY-MM-DD.json` | One backup per Pacific date, kept 14 days including today |
+| `/var/data/backups/state-YYYY-MM-DD.json` | One backup per America/Vancouver date, kept 14 days including today. The name stays on that zone when `DISPLAY_TZ` changes |
 | `/var/data/data.json` | Latest pushed board |
 | `/var/data/data.json.prev` | The board from the push before that |
 
@@ -116,7 +121,7 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 
 Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, mail, and money.
 
-Calendar events need `id`, `subject`, `start`, and `end`. `start` and `end` are UTC `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DD` for all-day events (end is the morning after the last day). Optional: `allDay`, `location`, `join` (Teams), `webLink` (Outlook), `note`, `stale`. The page shows today and the next 7 days in Pacific time. Timed events that overlap, when one looks like a flight, are marked Flight clash.
+Calendar events need `id`, `subject`, `start`, and `end`. `start` and `end` are UTC `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DD` for all-day events (end is the morning after the last day). Optional: `allDay`, `location`, `join` (Teams), `webLink` (Outlook), `note`, `stale`. The page shows today and the next 7 days in `DISPLAY_TZ`. Timed events that overlap, when one looks like a flight, are marked Flight clash. Area chips load that filter from the server. If the in-page request is refused, the chip follows its normal link, which matters on iPad Safari when Basic auth is not sent with `fetch`.
 
 Optional:
 

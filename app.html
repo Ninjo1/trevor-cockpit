@@ -88,7 +88,9 @@ h1 { font-size: 20px; letter-spacing: 0.04em; margin: 0; font-weight: 750; }
 .clocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .clk { background: var(--p); border: 1px solid var(--l); border-radius: 12px; padding: 8px 10px; min-width: 0; }
 .clk.on { border-color: var(--g); }
-.clk.home { border-color: var(--c); }
+.clk.current { border-color: var(--c); box-shadow: inset 0 0 0 1px var(--c); }
+.clk.current b { color: var(--c); }
+.clk.device { border-style: dashed; }
 .clk b { display: block; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--m); font-weight: 700; }
 .ct { display: block; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .cd, .sub { display: block; color: var(--m); font-size: 13px; }
@@ -247,9 +249,9 @@ footer { margin-top: 28px; font-size: 14px; }
   .nums { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
 @media (min-width: 1100px) {
-  .clocks { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .clocks { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .days { grid-template-columns: 1fr 1fr 1fr; }
-  .ct { font-size: 20px; }
+  .ct { font-size: 22px; }
 }
 </style>
 </head>
@@ -264,7 +266,7 @@ footer { margin-top: 28px; font-size: 14px; }
   </div>
   <p class="meta" id="asof"><!--PRE_ASOF--></p>
   <!--PRE_FX-->
-  <div class="clocks"><!--PRE_CLOCKS--></div>
+  <div class="clocks" id="clocks" data-home-tz="<!--PRE_HOME_TZ-->"><!--PRE_CLOCKS--></div>
   <p class="clknote">Clocks show the time this page was built, then update while it stays open.</p>
 </header>
 <div id="status">
@@ -295,7 +297,10 @@ footer { margin-top: 28px; font-size: 14px; }
     const active = document.activeElement;
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     const keep = [...app.querySelectorAll("details.keep")].map((node) => node.open);
-    const res = await fetch("api/fragment?area=" + encodeURIComponent(area === "All" ? "" : area), { cache: "no-store" });
+    const res = await fetch("api/fragment?area=" + encodeURIComponent(area === "All" ? "" : area), {
+      cache: "no-store",
+      credentials: "same-origin"
+    });
     if (!res.ok) throw new Error("refresh");
     const body = await res.json();
     app.innerHTML = body.main;
@@ -305,16 +310,25 @@ footer { margin-top: 28px; font-size: 14px; }
     });
   }
 
-  function setArea(next) {
+  async function applyArea(next, fallbackHref) {
     area = next;
     try { localStorage.setItem("cockpit-area", next); } catch (err) {}
-    history.replaceState(null, "", next === "All" ? "./" : "./?area=" + encodeURIComponent(next));
-    refresh().catch(() => setSave("warn", "The list was not refreshed."));
+    try {
+      await refresh();
+      history.replaceState(null, "", next === "All" ? "./" : "./?area=" + encodeURIComponent(next));
+    } catch (err) {
+      if (fallbackHref) {
+        window.location.assign(fallbackHref);
+        return;
+      }
+      setSave("warn", "The list was not refreshed.");
+    }
   }
 
   async function post(op, body) {
     const res = await fetch("api/" + op, {
       method: "POST",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify(body)
     });
@@ -326,7 +340,7 @@ footer { margin-top: 28px; font-size: 14px; }
     const chip = ev.target.closest("a.chip");
     if (!chip) return;
     ev.preventDefault();
-    setArea(chip.dataset.area);
+    applyArea(chip.dataset.area, chip.getAttribute("href") || chip.href);
   });
 
   app.addEventListener("submit", async (ev) => {
@@ -372,6 +386,10 @@ footer { margin-top: 28px; font-size: 14px; }
       await refresh();
     } catch (err) {
       row.classList.remove("busy");
+      if (op === "todo/toggle" || op === "email/handled") {
+        form.submit();
+        return;
+      }
       setSave("warn", "Not saved. Tap again.");
     }
   });
@@ -394,19 +412,47 @@ footer { margin-top: 28px; font-size: 14px; }
     const now = new Date();
     document.querySelectorAll(".clk").forEach((node) => {
       const zone = node.dataset.tz;
-      const time = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(now);
-      const day = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short", month: "short", day: "numeric" }).format(now);
-      const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", hourCycle: "h23" }).format(now));
-      const weekday = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(now);
-      node.querySelector(".ct").textContent = time;
-      node.querySelector(".cd").textContent = day;
-      node.classList.toggle("on", hour >= 8 && hour < 18 && weekday !== "Sat" && weekday !== "Sun");
+      try {
+        const time = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(now);
+        const day = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short", month: "short", day: "numeric" }).format(now);
+        const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", hourCycle: "h23" }).format(now));
+        const weekday = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(now);
+        node.querySelector(".ct").textContent = time;
+        node.querySelector(".cd").textContent = day;
+        node.classList.toggle("on", hour >= 8 && hour < 18 && weekday !== "Sat" && weekday !== "Sun");
+      } catch (err) {}
     });
   }
+
+  function ensureDeviceClock() {
+    const box = byId("clocks");
+    if (!box) return;
+    const home = box.dataset.homeTz || "";
+    let detected = "";
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (err) { return; }
+    if (!detected || detected === home) return;
+    const already = [...box.querySelectorAll(".clk")].some((node) => node.dataset.tz === detected);
+    if (already) return;
+    const card = document.createElement("div");
+    card.className = "clk device";
+    card.dataset.tz = detected;
+    const name = document.createElement("b");
+    name.textContent = detected.split("/").pop().replace(/_/g, " ");
+    const time = document.createElement("span");
+    time.className = "ct";
+    const day = document.createElement("span");
+    day.className = "cd";
+    const sub = document.createElement("small");
+    sub.className = "sub";
+    sub.textContent = "This device";
+    card.append(name, time, day, sub);
+    box.appendChild(card);
+  }
+  ensureDeviceClock();
   tick();
   setInterval(tick, 30000);
 
-  fetch("https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=1")
+  fetch("https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=1", { credentials: "same-origin" })
     .then((res) => { if (!res.ok) throw new Error("fx"); return res.json(); })
     .then((payload) => {
       const obs = payload.observations || [];
@@ -437,7 +483,9 @@ footer { margin-top: 28px; font-size: 14px; }
     paintTheme();
   });
 
-  if ((params.get("area") || "All") !== area) setArea(area);
+  if ((params.get("area") || "All") !== area) {
+    applyArea(area, area === "All" ? "./" : "./?area=" + encodeURIComponent(area));
+  }
   setInterval(() => { refresh().catch(() => setSave("warn", "Offline. Showing the last page.")); }, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
