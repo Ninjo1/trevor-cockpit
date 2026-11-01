@@ -6,6 +6,8 @@ import re
 import uuid
 
 AREAS = ("Echandia", "FiFi4", "Personal")
+# Filter chips only. They are not choices on the add or edit form.
+FILTER_AREAS = ("554 LLC", "Aurora")
 LEGACY = {"Personal / Own cos": "Personal", "Household": "Personal"}
 ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,80}\Z")
 DUE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")

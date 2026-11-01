@@ -110,7 +110,7 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 
 | Field | Values |
 | --- | --- |
-| `area` | `Echandia`, `FiFi4`, `Personal`. Older labels `Personal / Own cos` and `Household` display as Personal |
+| `area` | `Echandia`, `FiFi4`, `Personal`, and also `554 LLC` or `Aurora`. Older labels `Personal / Own cos` and `Household` display as Personal. The 554 LLC and Aurora chips appear only when a task, email, or money row uses that area |
 | `kind` | `task`, `email`, `draft`, `meeting`, `money` |
 | `section` | `now`, `open`, `waiting`, `watch`, `owed`, `money` |
 | `due` | `YYYY-MM-DD` or `""` |
@@ -122,7 +122,7 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 | `links` | `[{label, href, kind}]`. `kind` may be `clickup`, `outlook`, `teams`, `calendar`, `mail`, `web`, or `draft`. A draft link is `{kind: "draft", url, label optional}` and `url` must be http or https. When present, the row leads with Draft ready. When absent, that link is omitted |
 | `attachments` | Optional `[{name, url}]`. `url` must be http or https. `name` is at most 80 characters. Old payloads without this field still validate. Each file is a link on the same line as the other links. More than three files show the first three and `+N more` |
 
-Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, mail, and money.
+Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, waiting rows, mail, and money.
 
 Calendar events need `id`, `subject`, `start`, and `end`. `start` and `end` are UTC `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DD` for all-day events (end is the morning after the last day). Optional: `allDay`, `location`, `join` (Teams), `webLink` (Outlook), `note`, `stale`, `response`. `response` is `none`, `tentative`, `accepted`, or `declined`. Omit it and the board does not offer Accept or Decline. `none` and `tentative` do. The page shows today and the next 7 days in `DISPLAY_TZ`. Timed events that overlap, when one looks like a flight, are marked Flight clash. Area chips load that filter from the server. If the in-page request is refused, the chip follows its normal link, which matters on iPad Safari when Basic auth is not sent with `fetch`.
 

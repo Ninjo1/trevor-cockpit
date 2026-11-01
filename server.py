@@ -23,7 +23,7 @@ import fxrates
 import render
 import voice
 import weather as weather_mod
-from actions import AREAS, apply, brief_log
+from actions import AREAS, FILTER_AREAS, apply, brief_log
 from auth import basic_ok, bearer_ok, origin_allowed
 from icons import MANIFEST, icon_png
 from store import Config, StateError, data_dir_writable, load_data, load_state, save_data, save_state
@@ -63,7 +63,7 @@ def make_handler(config):
         def _area(self):
             query = parse_qs(urlsplit(self.path).query)
             area = (query.get("area") or [""])[0]
-            return area if area in AREAS else "All"
+            return area if area in AREAS or area in FILTER_AREAS else "All"
 
         def _send(self, code, body, content_type="text/html; charset=utf-8", extra=None):
             if isinstance(body, str):
@@ -611,7 +611,7 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 self._send(status, f"Could not save. {result}", "text/plain; charset=utf-8")
                 return
             area_q = fields.get("area_q") or ""
-            location = "/" + (f"?area={quote(area_q)}" if area_q in AREAS else "")
+            location = "/" + (f"?area={quote(area_q)}" if area_q in AREAS or area_q in FILTER_AREAS else "")
             if op == "question/toggle":
                 location += "#principles"
             elif op == "decision":
