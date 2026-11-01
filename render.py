@@ -1444,6 +1444,89 @@ def bottleneck_html(data):
     )
 
 
+def _decision_buttons(kind, target):
+    if kind == "draft":
+        pairs = (("approve", "Approve"), ("skip", "Skip"))
+    elif kind == "meeting":
+        pairs = (("accept", "Accept"), ("decline", "Decline"))
+    else:
+        pairs = (("checkin", "Check in"),)
+    buttons = ""
+    for choice, label in pairs:
+        buttons += (
+            f'<form class="dform" method="post" action="form/decision">{_hidden("type", kind)}'
+            f'{_hidden("target", target)}{_hidden("choice", choice)}'
+            f'<button class="btn" type="submit">{e(label)}</button></form>'
+        )
+    return buttons
+
+
+def _decision_undo(kind, target):
+    return (
+        f'<form class="dform" method="post" action="form/decision">{_hidden("type", kind)}'
+        f'{_hidden("target", target)}{_hidden("undo", "1")}'
+        f'<button class="btn ghost" type="submit">Undo</button></form>'
+    )
+
+
+def decisions_html(data, state, now):
+    """Slim strip. Omitted entirely when there is nothing to show."""
+    import decisions as decisions_mod
+
+    offered = decisions_mod.proposals(data, now)
+    stored = [row for row in (state or {}).get("decisions") or [] if isinstance(row, dict)]
+    latest = {}
+    for row in stored:
+        key = (row.get("type"), row.get("target"))
+        current = latest.get(key)
+        if row.get("status") == "queued" or current is None or current.get("status") != "queued":
+            latest[key] = row
+    cards = ""
+    seen = set()
+    for prop in offered:
+        key = (prop["type"], prop["target"])
+        seen.add(key)
+        cards += _decision_card(prop, latest.get(key))
+    for key, row in latest.items():
+        if key in seen or row.get("status") not in ("queued", "done", "failed"):
+            continue
+        cards += _decision_card({"type": key[0], "target": key[1], "label": key[1]}, row)
+    if not cards:
+        return ""
+    return (
+        '<details id="decisions" class="dstrip"><summary>Decisions <small>Tap to review</small></summary>'
+        f'{cards}<p class="dnote">Taps queue actions for your assistant. Nothing is sent until you confirm in chat.</p></details>'
+    )
+
+
+def _decision_card(prop, decision):
+    kind = prop.get("type") or ""
+    target = prop.get("target") or ""
+    label = e(prop.get("label") or target)
+    heading = {"draft": "Email draft", "meeting": "Meeting invite", "checkin": "Flight"}.get(kind, kind)
+    link = ""
+    href = prop.get("href")
+    if kind == "checkin" and href:
+        link = f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">Delta check-in</a>'
+    elif kind == "draft" and href:
+        link = f'<a class="draftready" href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">Draft ready</a>'
+    if decision and decision.get("status") in ("queued", "done", "failed"):
+        status = str(decision.get("status"))
+        shown_status = {"queued": "Queued", "done": "Done", "failed": "Failed"}.get(status, status)
+        note = decision.get("result_note") or ""
+        undo = _decision_undo(kind, target) if status == "queued" else ""
+        note_html = f'<span class="dnote">{e(note)}</span>' if note else ""
+        return (
+            f'<div class="dcard"><span class="tag">{e(heading)}</span><span>{label}</span>'
+            f'<span class="b">{e(shown_status)}</span><span>{e(decision.get("choice") or "")}</span>'
+            f'{note_html}{link}{undo}</div>'
+        )
+    return (
+        f'<div class="dcard"><span class="tag">{e(heading)}</span><span>{label}</span>'
+        f'{_decision_buttons(kind, target)}{link}</div>'
+    )
+
+
 def add_form(area):
     selected = area if area in AREAS else "Personal"
     options = "".join(
@@ -1739,7 +1822,8 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
         item["quadrant_resolved"] = derive_quadrant(item, today)
     blocks, delete_count = eisenhower_blocks(active_tasks, today, area, group)
     jarvis = jarvis_html(data, active_tasks, today)
-    html_out = f'<div class="home-top">{blocks["do_now"]}{waiting_html(data, state, today, area)}</div>'
+    html_out = decisions_html(data, state, clock)
+    html_out += f'<div class="home-top">{blocks["do_now"]}{waiting_html(data, state, today, area)}</div>'
     html_out += (
         f'<div class="quad-rest">{blocks["schedule"]}{blocks["delegate"]}{blocks["delete"]}</div>'
     )

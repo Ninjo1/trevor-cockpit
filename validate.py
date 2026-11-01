@@ -215,6 +215,9 @@ def _calendar(events):
             raise ValueError(f"calendar[{index}].stale must be true or false")
         if "join_url" in event and event["join_url"] is not None and not isinstance(event["join_url"], str):
             raise ValueError(f"calendar[{index}].join_url must be a string")
+        if "response" in event and event["response"] is not None:
+            if not isinstance(event["response"], str) or event["response"].strip().lower() not in ("", "none", "tentative", "accepted", "declined"):
+                raise ValueError(f"calendar[{index}].response must be none, tentative, accepted, or declined")
 
 
 def _money(rows):

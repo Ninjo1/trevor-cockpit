@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, ROOT)
 
+import decisions
 import render
 import store
 import voice
@@ -1283,6 +1284,127 @@ class VoiceTests(HttpCase):
         self.assertNotIn("Draft requested", row)
         self.assertIn("https://outlook.office.com/mail/drafts/ready", row)
         self.assertIn("Draft ready", row)
+
+
+class DecisionTests(HttpCase):
+    def _board(self, now):
+        soon = (now + dt.timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        soon_end = (now + dt.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        later = (now + dt.timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        later_end = (now + dt.timedelta(days=3, hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "items": [{
+                "id": "M1", "title": "Harbor reply", "area": "Echandia", "kind": "email", "section": "now",
+                "due": "", "done": False,
+                "links": [{"kind": "draft", "url": "https://outlook.office.com/mail/drafts/harbor"}],
+            }],
+            "calendar": [
+                {"id": "cal-open", "subject": "Budget decision", "start": soon, "end": soon_end, "response": "tentative"},
+                {"id": "cal-yes", "subject": "Already accepted", "start": soon, "end": soon_end, "response": "accepted"},
+            ],
+            "travel": [
+                {"id": "T-soon", "kind": "flight", "title": "DL 1001 to Osaka", "start": soon, "end": soon_end, "confirmation": "ABC123"},
+                {"id": "T-later", "kind": "flight", "title": "DL 200 later", "start": later, "end": later_end, "confirmation": "ZZZ999"},
+            ],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+
+    def test_window_and_empty_strip(self):
+        now = dt.datetime(2026, 11, 1, 12, tzinfo=dt.timezone.utc)
+        offers = decisions.proposals(self._board(now), now)
+        kinds = {(row["type"], row["target"]) for row in offers}
+        self.assertIn(("draft", "https://outlook.office.com/mail/drafts/harbor"), kinds)
+        self.assertIn(("meeting", "cal-open"), kinds)
+        self.assertNotIn(("meeting", "cal-yes"), kinds)
+        self.assertIn(("checkin", "DL 1001 to Osaka|ABC123"), kinds)
+        self.assertFalse(any(row["target"].startswith("DL 200") for row in offers))
+        checkin = next(row for row in offers if row["type"] == "checkin")
+        self.assertEqual(checkin["href"], "https://www.delta.com/mytrips/?confirmationNumber=ABC123")
+        past = (now - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        gone = self._board(now)
+        gone["travel"][0]["start"] = past
+        self.assertFalse(any(row["type"] == "checkin" and "1001" in row["target"] for row in decisions.proposals(gone, now)))
+        empty, _counts, _jarvis = render.render_main(
+            {"items": [], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}},
+            fresh_state(), now=now,
+        )
+        self.assertNotIn('id="decisions"', empty)
+        shown, _counts, _jarvis = render.render_main(self._board(now), fresh_state(), now=now)
+        self.assertIn('id="decisions"', shown)
+        self.assertIn("Nothing is sent until you confirm in chat.", shown)
+        self.assertIn("Approve", shown)
+        self.assertIn("Accept", shown)
+        self.assertIn("Check in", shown)
+        self.assertIn("Delta check-in", shown)
+        bare = {"items": [], "calendar": [{"id": "c", "subject": "Old", "start": "2026-11-01T00:00:00Z", "end": "2026-11-01T01:00:00Z"}], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
+        validate_data(bare)
+        bad = dict(bare)
+        bad["calendar"] = [dict(bare["calendar"][0], response="maybe")]
+        with self.assertRaises(ValueError):
+            validate_data(bad)
+
+    def test_decision_auth_idempotency_undo_and_result(self):
+        now = dt.datetime(2026, 11, 1, 12, tzinfo=dt.timezone.utc)
+        with open(os.path.join(self.tmp.name, "data.json"), "w", encoding="utf-8") as handle:
+            json.dump(self._board(now), handle)
+        body = json.dumps({"type": "draft", "target": "https://outlook.office.com/mail/drafts/harbor", "choice": "approve"}).encode()
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=body, headers={"Content-Type": "application/json"}, auth=False,
+        )
+        self.assertEqual(status, 401)
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=body, headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, raw)
+        first = json.loads(raw)["result"]
+        self.assertEqual(first["status"], "queued")
+        self.assertEqual(first["choice"], "approve")
+        self.assertEqual(first["result_note"], "")
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=body, headers={"Content-Type": "application/json"},
+        )
+        second = json.loads(raw)["result"]
+        self.assertEqual(second["id"], first["id"])
+        changed = json.dumps({"type": "draft", "target": first["target"], "choice": "skip"}).encode()
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=changed, headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(json.loads(raw)["result"]["id"], first["id"])
+        self.assertEqual(json.loads(raw)["result"]["choice"], "skip")
+        status, _headers, raw = self.request("/api/decisions?status=queued", auth=False)
+        self.assertEqual(status, 503)
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self.request("/api/decisions?status=queued", auth="Bearer no")
+        self.assertEqual(status, 401)
+        status, _headers, raw = self.request("/api/decisions?status=queued", auth="Bearer pickup-secret")
+        self.assertEqual(len(json.loads(raw)["decisions"]), 1)
+        undo = json.dumps({"type": "draft", "target": first["target"], "undo": True}).encode()
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=undo, headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw)["result"]["undone"])
+        status, _headers, raw = self.request("/api/decisions?status=queued", auth="Bearer pickup-secret")
+        self.assertEqual(json.loads(raw)["decisions"], [])
+        status, _headers, raw = self.request(
+            "/api/decisions", method="POST", data=body, headers={"Content-Type": "application/json"},
+        )
+        again = json.loads(raw)["result"]
+        self.assertNotEqual(again["id"], first["id"])
+        status, _headers, raw = self.request(
+            "/api/decisions/" + again["id"] + "/result",
+            method="POST",
+            data=json.dumps({"status": "failed", "note": "Mailbox was locked"}).encode(),
+            headers={"Content-Type": "application/json"},
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["result"]["result_note"], "Mailbox was locked")
+        status, _headers, page = self.request("/")
+        text = page.decode()
+        self.assertIn("Failed", text)
+        self.assertIn("Mailbox was locked", text)
+        self.assertIn("Nothing is sent until you confirm in chat.", text)
 
 
 if __name__ == "__main__":

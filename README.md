@@ -124,7 +124,7 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 
 Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, mail, and money.
 
-Calendar events need `id`, `subject`, `start`, and `end`. `start` and `end` are UTC `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DD` for all-day events (end is the morning after the last day). Optional: `allDay`, `location`, `join` (Teams), `webLink` (Outlook), `note`, `stale`. The page shows today and the next 7 days in `DISPLAY_TZ`. Timed events that overlap, when one looks like a flight, are marked Flight clash. Area chips load that filter from the server. If the in-page request is refused, the chip follows its normal link, which matters on iPad Safari when Basic auth is not sent with `fetch`.
+Calendar events need `id`, `subject`, `start`, and `end`. `start` and `end` are UTC `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DD` for all-day events (end is the morning after the last day). Optional: `allDay`, `location`, `join` (Teams), `webLink` (Outlook), `note`, `stale`, `response`. `response` is `none`, `tentative`, `accepted`, or `declined`. Omit it and the board does not offer Accept or Decline. `none` and `tentative` do. The page shows today and the next 7 days in `DISPLAY_TZ`. Timed events that overlap, when one looks like a flight, are marked Flight clash. Area chips load that filter from the server. If the in-page request is refused, the chip follows its normal link, which matters on iPad Safari when Basic auth is not sent with `fetch`.
 
 Optional:
 
@@ -255,6 +255,11 @@ A minimal restaurants object, if the morning file does not have one yet:
 | GET | `/api/voice/draft_requests?status=pending` | Bearer `VOICE_PICKUP_TOKEN` | `{requests: [...]}`. 503 if the token is unset. `status` may be `pending` or `done` |
 | POST | `/api/voice/draft_requests/<id>/done` | Bearer `VOICE_PICKUP_TOKEN` | Body `{draft_weblink?}`. Marks that queued draft done |
 | POST | `/api/voice/ask` | Basic | Body `{text}`. Returns `{ok, answer}` from the board. No outside model |
+| POST | `/api/decisions` | Basic | Body `{type, target, choice}`. `type` is `draft`, `meeting`, or `checkin`. Choices are `approve` or `skip`, `accept` or `decline`, and `checkin`. The same target while queued updates that row instead of adding another. `{type, target, undo: true}` removes a queued row |
+| GET | `/api/decisions?status=queued` | Bearer `VOICE_PICKUP_TOKEN` | `{decisions: [...]}`. 503 if the token is unset. `status` may be `queued`, `done`, or `failed` |
+| POST | `/api/decisions/<id>/result` | Bearer `VOICE_PICKUP_TOKEN` | Body `{status: "done" or "failed", note?}`. Stores the note on `result_note` |
+
+The Decisions strip is omitted when there is nothing to approve, accept, or check in, and no queued result. A flight check-in is offered only in the 24 hours before departure, with a link to `https://www.delta.com/mytrips/` and the confirmation number when the trip has one. Taps only queue a record. Nothing is sent.
 
 An email item may include optional `message_id`, `conversation_id`, and `subject`. The mic button queues a reply. It does not talk to Outlook. A pending queue row shows Draft requested on that email until a `kind: "draft"` link arrives, or until the pickup call stores `draft_weblink`. Spoken questions are answered on the server from the current board. The local intents are due today, Do now, the next trip, today's meetings, waiting on, and upgrade status. Anything else returns `I can't answer that from the board yet`. `voice.answer` is the function to replace if a model is added later.
 
