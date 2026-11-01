@@ -715,12 +715,74 @@ def weather_card(rows, today=None):
     return f'<article class="card glance-card" id="weather"><h2>Weather</h2>{body}</article>'
 
 
-def travel_card(data, zone, zone_label, now):
-    rows = data.get("travel") if isinstance(data.get("travel"), list) else None
+def _flight_codes(text):
+    found = re.findall(r"\b([A-Za-z]{2})\s*(\d{2,4})\b", str(text or ""))
+    return {f"{airline.upper()}{number}" for airline, number in found}
+
+
+def _route_airports(route):
+    parts = re.split(r"[^A-Za-z]+", str(route or "").upper())
+    return [part for part in parts if len(part) == 3]
+
+
+def _upgrade_match(upgrade, trip, start):
+    """True when this upgrade belongs on this trip.
+
+    A flight number match wins. A route match also counts when the dates agree.
+    """
+    codes = _flight_codes(upgrade.get("flight"))
+    trip_codes = _flight_codes(trip.get("title")) | _flight_codes(trip.get("confirmation"))
+    date = str(upgrade.get("date") or "")[:10]
+    trip_date = start.date().isoformat() if start else ""
+    dated = not date or date == trip_date
+    if codes and codes & trip_codes and dated:
+        return True
+    airports = _route_airports(upgrade.get("route"))
+    if len(airports) >= 2 and date and date == trip_date:
+        origin = str(trip.get("from") or "").upper()
+        dest = str(trip.get("to") or "").upper()
+        if airports[0] in origin and airports[1] in dest:
+            return True
+    return False
+
+
+def _upgrade_html(row, zone):
+    title = _link_or_text(row.get("flight") or "Flight", row.get("url"))
+    bits = [e(part) for part in (row.get("date"), row.get("route"), row.get("requested_cabin")) if part]
+    checked = row.get("checked_at")
+    moment = utc(checked) if isinstance(checked, str) else None
+    if moment:
+        checked_text = "Checked " + day_label(moment.astimezone(zone).date()) + ", " + clock_time(moment.astimezone(zone))
+    elif checked:
+        checked_text = "Checked " + clean_text(checked)
+    else:
+        checked_text = ""
+    position = row.get("position")
+    pos = f"Position {position}" if position not in (None, "") else ""
+    return (
+        f'<div class="up"><div class="ttl">{title}</div>'
+        f'<div class="meta"><span class="b">{e(row.get("status") or "")}</span>'
+        + (f"<span>{e(pos)}</span>" if pos else "")
+        + "</div>"
+        + (f'<div class="nt">{" · ".join(bits)}</div>' if bits else "")
+        + (f'<div class="src">{e(checked_text)}</div>' if checked_text else "")
+        + "</div>"
+    )
+
+
+def _upgrade_rows(data):
+    rows = data.get("upgrades") if isinstance(data, dict) and isinstance(data.get("upgrades"), list) else None
     if not rows:
-        return ""
+        return []
+    kept = [row for row in rows if isinstance(row, dict)]
+    return kept[:12]
+
+
+def travel_card(data, zone, zone_label, now):
+    rows = data.get("travel") if isinstance(data, dict) and isinstance(data.get("travel"), list) else None
+    upgrades = _upgrade_rows(data)
     upcoming = []
-    for row in rows:
+    for row in rows or []:
         if not isinstance(row, dict):
             continue
         end = utc(row.get("end"))
@@ -729,10 +791,22 @@ def travel_card(data, zone, zone_label, now):
             continue
         upcoming.append((start or end or now, row, start, end))
     upcoming.sort(key=lambda item: item[0])
-    if not upcoming:
+    if not upcoming and not upgrades:
         return ""
+    assigned = {index: [] for index in range(len(upcoming))}
+    loose = []
+    for upgrade in upgrades:
+        match_at = None
+        for index, (_sort, trip, start, _end) in enumerate(upcoming):
+            if _upgrade_match(upgrade, trip, start):
+                match_at = index
+                break
+        if match_at is None:
+            loose.append(upgrade)
+        else:
+            assigned[match_at].append(upgrade)
 
-    def one_trip(row, start, end):
+    def one_trip(index, row, start, end):
         kind = row.get("kind") or "other"
         route = " to ".join(part for part in (clean_text(row.get("from")), clean_text(row.get("to"))) if part)
         times = _travel_times(kind, start, end, zone, zone_label)
@@ -755,6 +829,7 @@ def travel_card(data, zone, zone_label, now):
                 extra += f'<details class="fold"><summary>Details</summary><div class="nt">{e(details)}</div></details>'
             else:
                 extra += f'<div class="nt">{e(details)}</div>'
+        extra += "".join(_upgrade_html(item, zone) for item in assigned[index])
         return (
             f'<div class="trip"><div class="meta"><span class="tag">{e(kind)}</span>{"".join(flags)}</div>'
             f'<div class="ttl">{title}</div>'
@@ -764,8 +839,10 @@ def travel_card(data, zone, zone_label, now):
             + "</div>"
         )
 
-    shown = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[:5])
-    hidden = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[5:])
+    shown = "".join(one_trip(index, row, start, end) for index, (_sort, row, start, end) in enumerate(upcoming[:5]))
+    hidden = "".join(one_trip(index, row, start, end) for index, (_sort, row, start, end) in enumerate(upcoming[5:], start=5))
+    if loose:
+        shown += "".join(_upgrade_html(item, zone) for item in loose)
     if hidden:
         shown += f'<details class="fold"><summary>Show all</summary>{hidden}</details>'
     return f'<article class="card glance-card" id="next-up"><h2>Next up</h2>{shown}</article>'
@@ -829,44 +906,6 @@ def today_meetings_card(data, zone, zone_label, now):
     return body
 
 
-def upgrades_card(data, zone):
-    rows = data.get("upgrades") if isinstance(data.get("upgrades"), list) else None
-    if not rows:
-        return ""
-    body = ""
-    shown = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        shown += 1
-        if shown > 12:
-            break
-        title = _link_or_text(row.get("flight") or "Flight", row.get("url"))
-        bits = [e(part) for part in (row.get("date"), row.get("route"), row.get("requested_cabin")) if part]
-        checked = row.get("checked_at")
-        moment = utc(checked) if isinstance(checked, str) else None
-        if moment:
-            checked_text = "Checked " + day_label(moment.astimezone(zone).date()) + ", " + clock_time(moment.astimezone(zone))
-        elif checked:
-            checked_text = "Checked " + clean_text(checked)
-        else:
-            checked_text = ""
-        position = row.get("position")
-        pos = f"Position {position}" if position not in (None, "") else ""
-        body += (
-            f'<div class="up"><div class="ttl">{title}</div>'
-            f'<div class="meta"><span class="b">{e(row.get("status") or "")}</span>'
-            + (f"<span>{e(pos)}</span>" if pos else "")
-            + "</div>"
-            + (f'<div class="nt">{" · ".join(bits)}</div>' if bits else "")
-            + (f'<div class="src">{e(checked_text)}</div>' if checked_text else "")
-            + "</div>"
-        )
-    if not body:
-        return ""
-    return f'<article class="card glance-card" id="upgrades"><h2>Upgrades</h2>{body}</article>'
-
-
 def glance_html(data, zone, zone_label, weather=None, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if now.tzinfo is None:
@@ -885,7 +924,6 @@ def glance_html(data, zone, zone_label, weather=None, now=None):
         cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}], now.astimezone(zone).date()))
     if isinstance(data, dict):
         cards.append(travel_card(data, zone, zone_label, now))
-        cards.append(upgrades_card(data, zone))
     cards = [card for card in cards if card]
     if not cards:
         return ""

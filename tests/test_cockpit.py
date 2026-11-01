@@ -662,9 +662,84 @@ class GlanceTests(unittest.TestCase):
         self.assertIn("Sample call", html)
         self.assertIn('class="lk joinbig"', html)
         self.assertIn("Vancouver", html)
-        self.assertIn("Waitlisted", html)
-        self.assertIn('href="https://example.com/delta"', html)
-        self.assertIn("Checked", html)
+        self.assertNotIn('id="upgrades"', html)
+        card = html.split('id="next-up"', 1)[1]
+        self.assertIn("Waitlisted", card)
+        self.assertIn("Position 4", card)
+        self.assertIn("Delta One", card)
+        self.assertIn("BKK-SEA", card)
+        self.assertIn('href="https://example.com/delta"', card)
+        self.assertIn("Checked", card)
+        self.assertNotIn("!", visible(html))
+
+    def test_upgrade_status_renders_inside_the_matching_trip(self):
+        now = dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc)
+        data = self._base()
+        data["travel"] = [
+            {
+                "id": "T-1", "kind": "flight", "title": "DL 1001 to Osaka",
+                "start": "2026-11-03T09:30:00+07:00", "end": "2026-11-03T16:00:00+07:00",
+                "from": "BKK", "to": "KIX",
+            },
+            {
+                "id": "T-2", "kind": "hotel", "title": "Namba stay",
+                "start": "2026-11-03T15:00:00+09:00", "end": "2026-11-06T11:00:00+09:00",
+            },
+        ]
+        data["upgrades"] = [
+            {
+                "flight": "DL 1001", "date": "2026-11-03", "route": "BKK-KIX",
+                "requested_cabin": "Delta One", "status": "Waitlisted", "position": 4,
+                "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/delta",
+            },
+            {
+                "flight": "DL 1001", "date": "2026-11-09", "route": "BKK-KIX",
+                "requested_cabin": "First", "status": "Cleared", "position": 1,
+                "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/cleared",
+            },
+            {
+                "flight": "DL 999", "date": "2026-11-08", "route": "SEA-BKK",
+                "requested_cabin": "Comfort+", "status": "Requested", "position": 2,
+                "checked_at": "2026-11-01T12:00:00Z", "url": "https://example.com/other",
+            },
+        ]
+        html, _counts, _jarvis = render.render_main(
+            data, fresh_state(), zone=ZoneInfo("Asia/Bangkok"), zone_label="Bangkok", now=now,
+        )
+        self.assertNotIn('id="upgrades"', html)
+        card = html.split('id="next-up"', 1)[1]
+        trip, rest = card.split("Namba stay", 1)
+        self.assertIn("Waitlisted", trip)
+        self.assertIn("Position 4", trip)
+        self.assertIn("Delta One", trip)
+        self.assertIn("BKK-KIX", trip)
+        self.assertIn("Checked", trip)
+        self.assertIn('href="https://example.com/delta"', trip)
+        self.assertNotIn("Requested", trip)
+        self.assertNotIn("Cleared", trip)
+        self.assertIn("Requested", rest)
+        self.assertIn("Cleared", rest)
+        self.assertIn('href="https://example.com/other"', rest)
+        self.assertTrue(render._upgrade_match(
+            {"flight": "DL 200", "date": "2026-11-04", "route": "BKK-KIX"},
+            {"title": "City hop", "from": "BKK", "to": "KIX"},
+            dt.datetime(2026, 11, 4, 9, 30, tzinfo=dt.timezone(dt.timedelta(hours=7))),
+        ))
+        bare = self._base()
+        bare["travel"] = data["travel"]
+        bare["upgrades"] = []
+        empty, _counts, _jarvis = render.render_main(bare, fresh_state(), now=now)
+        self.assertIn("DL 1001 to Osaka", empty)
+        self.assertNotIn('class="up"', empty)
+        self.assertNotIn('id="upgrades"', empty)
+        only = self._base()
+        only["upgrades"] = data["upgrades"][:1]
+        lone, _counts, _jarvis = render.render_main(
+            only, fresh_state(), zone=ZoneInfo("Asia/Bangkok"), zone_label="Bangkok", now=now,
+        )
+        self.assertIn('id="next-up"', lone)
+        self.assertIn("Waitlisted", lone.split('id="next-up"', 1)[1])
+        self.assertNotIn('id="upgrades"', lone)
         self.assertNotIn("!", visible(html))
 
     def test_hotel_dates_weather_days_and_show_all(self):
