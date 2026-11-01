@@ -1657,5 +1657,84 @@ class EventTests(HttpCase):
         self.assertIn('type: "restaurant"', script)
 
 
+class AreaFilterTests(HttpCase):
+    def _board(self):
+        return {
+            "items": [
+                {"id": "T-ech", "title": "Echandia task", "area": "Echandia", "kind": "task", "section": "now", "due": "", "done": False, "links": []},
+                {"id": "T-aur", "title": "Aurora task", "area": "Aurora", "kind": "task", "section": "open", "due": "", "done": False, "links": []},
+                {"id": "T-wait", "title": "Personal waiting row", "area": "Personal", "kind": "task", "section": "waiting", "due": "", "done": False, "links": []},
+            ],
+            "calendar": [],
+            "restaurants": {
+                "city": "Sample Harbor",
+                "as_of": "",
+                "eat": [{"name": "North Pier Cafe", "area": "554 LLC", "cuisine": "Soup", "price": "20 CAD", "why": "Neighborhood, not a board area.", "map_url": "https://example.com/a"}],
+                "delivery": [],
+            },
+            "money": [{
+                "id": "M-554",
+                "who": "Harbor lease",
+                "direction": "owed_to_me",
+                "amount": "10.00",
+                "currency": "USD",
+                "area": "554 LLC",
+                "due": "",
+                "note": "",
+                "href": "",
+            }],
+        }
+
+    def test_extra_area_chips_follow_rows_and_filter(self):
+        sample = json.load(open(SAMPLE, encoding="utf-8"))
+        plain = render.chips_html("All", sample, fresh_state())
+        self.assertIn('data-area="Personal"', plain)
+        self.assertNotIn("554 LLC", plain)
+        self.assertNotIn("Aurora", plain)
+        restaurant_only = self._board()
+        restaurant_only["items"] = [restaurant_only["items"][0]]
+        restaurant_only["money"] = []
+        hidden = render.chips_html("All", restaurant_only, fresh_state())
+        self.assertNotIn("554 LLC", hidden)
+        self.assertNotIn("Aurora", hidden)
+        shown = render.chips_html("All", self._board(), fresh_state())
+        self.assertLess(shown.find('data-area="Personal"'), shown.find('data-area="554 LLC"'))
+        self.assertLess(shown.find('data-area="554 LLC"'), shown.find('data-area="Aurora"'))
+        money_only = self._board()
+        money_only["items"] = [money_only["items"][0]]
+        money_chips = render.chips_html("All", money_only, fresh_state())
+        self.assertIn('data-area="554 LLC"', money_chips)
+        self.assertNotIn('data-area="Aurora"', money_chips)
+        filtered, _counts, _jarvis = render.render_main(self._board(), fresh_state(), area="554 LLC")
+        self.assertIn("Harbor lease", filtered)
+        self.assertNotIn("Echandia task", filtered)
+        self.assertNotIn("Aurora task", filtered)
+        self.assertNotIn("Personal waiting row", filtered)
+        everyone, _counts, _jarvis = render.render_main(self._board(), fresh_state(), area="All")
+        self.assertIn("Personal waiting row", everyone)
+        self.assertIn(">Echandia</option>", filtered)
+        self.assertNotIn("554 LLC</option>", filtered)
+        other, _counts, _jarvis = render.render_main(self._board(), fresh_state(), area="Aurora")
+        self.assertIn("Aurora task", other)
+        self.assertNotIn("Harbor lease", other)
+        self.assertNotIn("Echandia task", other)
+        with open(os.path.join(self.tmp.name, "data.json"), "w", encoding="utf-8") as handle:
+            json.dump(self._board(), handle)
+        status, _headers, page = self.request("/?area=554%20LLC")
+        self.assertEqual(status, 200, page)
+        text = page.decode()
+        self.assertIn('class="chip on" data-area="554 LLC"', text)
+        self.assertIn("Harbor lease", text)
+        self.assertNotIn("Aurora task", text)
+        status, _headers, raw = self.request(
+            "/api/events",
+            method="POST",
+            data=json.dumps({"type": "filter", "area": "554 LLC"}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw)["result"]["area"], "554 LLC")
+
+
 if __name__ == "__main__":
     unittest.main()

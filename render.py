@@ -15,7 +15,7 @@ import re
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from actions import AREAS, area_of
+from actions import AREAS, FILTER_AREAS, area_of
 from textclean import clean_text
 
 FALLBACK_ZONE = "America/Vancouver"
@@ -1544,9 +1544,26 @@ def add_form(area):
     )
 
 
-def chips_html(area):
+def areas_on_board(data, state):
+    """Board areas on tasks, mail, and money. Restaurant neighborhoods are not areas."""
+    found = set()
+    for item in merged(data or {}, state or {}):
+        if item.get("area"):
+            found.add(item["area"])
+    for row in (data or {}).get("money") or []:
+        if isinstance(row, dict):
+            found.add(area_of(row.get("area")))
+    return found
+
+
+def chips_html(area, data=None, state=None):
+    present = areas_on_board(data, state)
+    names = ["All", *AREAS]
+    for name in FILTER_AREAS:
+        if name in present:
+            names.append(name)
     parts = []
-    for name in ("All",) + tuple(AREAS):
+    for name in names:
         href = "./" if name == "All" else "./?area=" + quote(name)
         on = " on" if name == area else ""
         parts.append(f'<a class="chip{on}" data-area="{e(name)}" href="{href}">{e(name)}</a>')
@@ -1751,6 +1768,8 @@ def waiting_html(data, state, today, area):
     for row in raw_rows:
         if not isinstance(row, dict) or not row.get("id"):
             continue
+        if area != "All" and area_of(row.get("area")) != area:
+            continue
         overlay = todos.get(row["id"]) or {}
         if overlay.get("done"):
             continue
@@ -1801,7 +1820,7 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
     elif not zone_label:
         zone_label = zone_city(getattr(zone, "key", FALLBACK_ZONE))
     today = today or dt.datetime.now(zone).date()
-    area = area if area in AREAS else "All"
+    area = area if area in AREAS or area in FILTER_AREAS else "All"
     rows = [item for item in merged(data, state) if area == "All" or item["area"] == area]
     emails = [item for item in rows if item.get("kind") in ("email", "draft")]
     tasks = [
@@ -1961,7 +1980,7 @@ def fill(template, data, state, area="All", today=None, env=None, weather=None, 
     return (
         template.replace("<!--PRE_MAIN-->", main)
         .replace("<!--PRE_JARVIS-->", jarvis)
-        .replace("<!--PRE_CHIPS-->", chips_html(area))
+        .replace("<!--PRE_CHIPS-->", chips_html(area, data, state))
         .replace("<!--PRE_CLOCKS-->", clocks_html(moment, env=env, data=data, today=clock_day))
         .replace("<!--PRE_HOME_TZ-->", e_raw(home_key))
         .replace("<!--PRE_COUNTS-->", e(counts))

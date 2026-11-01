@@ -9,12 +9,12 @@ import datetime as dt
 import uuid
 
 import render
-from actions import AREAS, area_of
+from actions import AREAS, FILTER_AREAS, area_of
 
 RETENTION_DAYS = 180
 DEFAULT_LIMIT = 1000
 MAX_LIMIT = 5000
-FILTERS = ("All",) + tuple(AREAS)
+FILTERS = ("All",) + tuple(AREAS) + tuple(FILTER_AREAS)
 QUADRANTS = ("do_now", "schedule", "delegate", "delete")
 
 
@@ -312,7 +312,7 @@ def record_client(state, body, moment):
     if kind == "filter":
         area = body.get("area")
         if area not in FILTERS:
-            raise ValueError("area must be All, Echandia, FiFi4, or Personal")
+            raise ValueError("area must be All, Echandia, FiFi4, Personal, 554 LLC, or Aurora")
         return append(state, _event("filter", moment, "", area, {"area": area}), moment)
     if kind == "restaurant":
         label = _label(body.get("label"))
