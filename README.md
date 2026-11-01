@@ -35,7 +35,7 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS_SHA256` | Render dashboard, secret | Lowercase hex SHA-256 of the sign-in password. Preferred. When set, Basic auth checks this hash |
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
-| `VOICE_PICKUP_TOKEN` | Render dashboard, secret | Bearer token for the voice draft pickup routes. Leave it unset until you choose a value. If it is unset those routes return 503 |
+| `VOICE_PICKUP_TOKEN` | Render dashboard, secret | Bearer token for the voice draft pickup routes and `GET /api/events`. Leave it unset until you choose a value. If it is unset those routes return 503 |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
 | `HOME_TZ` | Render dashboard | Current location, the Here clock, not Vancouver. Vancouver is always the Home clock. These names stay as they are. Robbins questions reset at midnight in this zone, or in today's payload location zone when that place includes a time zone. If neither is set, that reset uses Asia/Bangkok. Example: `Asia/Bangkok` |
 | `HOME_LABEL` | Render dashboard, optional | City name for the current location. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok). This is not the Vancouver home label |
@@ -258,8 +258,25 @@ A minimal restaurants object, if the morning file does not have one yet:
 | POST | `/api/decisions` | Basic | Body `{type, target, choice}`. `type` is `draft`, `meeting`, or `checkin`. Choices are `approve` or `skip`, `accept` or `decline`, and `checkin`. The same target while queued updates that row instead of adding another. `{type, target, undo: true}` removes a queued row |
 | GET | `/api/decisions?status=queued` | Bearer `VOICE_PICKUP_TOKEN` | `{decisions: [...]}`. 503 if the token is unset. `status` may be `queued`, `done`, or `failed` |
 | POST | `/api/decisions/<id>/result` | Bearer `VOICE_PICKUP_TOKEN` | Body `{status: "done" or "failed", note?}`. Stores the note on `result_note` |
+| GET | `/api/events?since=<ISO>&limit=<n>` | Bearer `VOICE_PICKUP_TOKEN` | `{events: [...], next_since}`. 503 if the token is unset. `since` is exclusive. `limit` defaults to 1000 and must be 1 to 5000. Oldest first |
+| POST | `/api/events` | Basic | Body `{type: "filter", area}` or `{type: "restaurant", label, kind, area?, place?}`. Records an area chip or a restaurant link. Other event types are written by the action itself |
 
 The Decisions strip is omitted when there is nothing to approve, accept, or check in, and no queued result. A flight check-in is offered only in the 24 hours before departure, with a link to `https://www.delta.com/mytrips/` and the confirmation number when the trip has one. Taps only queue a record. Nothing is sent.
+
+Board actions also append a learning event in `state.events`. Rows older than 180 days are removed. An event is `{id, ts, type, item_id?, area?, data}`. `ts` is ISO UTC with milliseconds. `data` holds ids, labels, and areas. Email bodies and note text are not stored.
+
+| type | When | data |
+| --- | --- | --- |
+| `task_tick` | Task tick or untick | `{done, label?}` |
+| `snooze` | Snooze or clear | `{kind: "todo" or "email", until: "YYYY-MM-DD" or null, label?}` |
+| `quadrant` | Move | `{from?, to, label?}`. `from` and `to` are `do_now`, `schedule`, `delegate`, or `delete` |
+| `email_handled` | Email handled or reopened | `{handled, label?}` |
+| `decision` | Decision tap, including undo | `{decision_type, target, choice?, decision_id?, undo?, label?}` |
+| `filter` | Area chip | `{area}` and the same value on the event `area` (`All`, `Echandia`, `FiFi4`, or `Personal`) |
+| `robbins` | Robbins question tick | `{done, day, section?, label?}`. `item_id` is the question id |
+| `restaurant` | Map or delivery link | `{label, kind: "eat" or "delivery", place?}`. `area` is the neighborhood when the place has one |
+
+`GET /api/events` returns those objects in `events`, oldest first. `next_since` is the `ts` of the last row in that page. Pass it as `since` on the next poll. Events at that exact time are not returned again. An empty page echoes `since`, or the server time when `since` was omitted.
 
 An email item may include optional `message_id`, `conversation_id`, and `subject`. The mic button queues a reply. It does not talk to Outlook. A pending queue row shows Draft requested on that email until a `kind: "draft"` link arrives, or until the pickup call stores `draft_weblink`. Spoken questions are answered on the server from the current board. The local intents are due today, Do now, the next trip, today's meetings, waiting on, and upgrade status. Anything else returns `I can't answer that from the board yet`. `voice.answer` is the function to replace if a model is added later.
 

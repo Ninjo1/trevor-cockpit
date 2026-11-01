@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import decisions
+import events
 import fxrates
 import render
 import voice
@@ -283,8 +284,13 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
         def _mutate(self, op, body):
             try:
                 with self.state_lock:
+                    moment = dt.datetime.now(dt.timezone.utc)
                     state = load_state(self.cfg)
+                    data = load_data(self.cfg)
+                    zone, _label = render.resolve_display()
+                    captured = events.capture(data, state, op, body, moment.astimezone(zone).date())
                     result = apply(state, op, body, now_iso())
+                    events.record_action(state, op, body, result, captured, moment)
                     state["log"] = list(state.get("log") or [])
                     state["log"].append(brief_log(op, body, now_iso()))
                     save_state(self.cfg, state)
@@ -327,6 +333,9 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     self._json(status, {"ok": False, "error": result})
                     return
                 self._json(200, {"ok": True, "result": result})
+                return
+            if op == "events":
+                self._event_write(payload)
                 return
             status, result = self._mutate(op, payload)
             if status != 200:
@@ -429,9 +438,12 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
         def _decision_apply(self, payload):
             try:
                 with self.state_lock:
+                    moment = dt.datetime.now(dt.timezone.utc)
                     state = load_state(self.cfg)
                     data = load_data(self.cfg)
-                    record = decisions.queue_decision(state, data, payload, now_iso(), dt.datetime.now(dt.timezone.utc))
+                    captured = events.capture_decision(data, state, payload)
+                    record = decisions.queue_decision(state, data, payload, now_iso(), moment)
+                    events.record_decision(state, payload, record, captured, moment)
                     save_state(self.cfg, state)
             except KeyError:
                 return 404, "decision was not found"
@@ -485,6 +497,48 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 self._json(500, {"ok": False, "error": str(ex)})
                 return
             self._json(200, {"ok": True, "result": record})
+
+        def _event_write(self, payload):
+            try:
+                with self.state_lock:
+                    moment = dt.datetime.now(dt.timezone.utc)
+                    state = load_state(self.cfg)
+                    record = events.record_client(state, payload, moment)
+                    save_state(self.cfg, state)
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            except OSError:
+                self._json(500, {"ok": False, "error": "could not store the event"})
+                return
+            self._json(200, {"ok": True, "result": record})
+
+        def _event_list(self):
+            if not self._voice_guard():
+                return
+            query = parse_qs(urlsplit(self.path).query)
+            since_text = (query.get("since") or [""])[0].strip()
+            limit_text = (query.get("limit") or [""])[0].strip()
+            try:
+                since = events.parse_time(since_text) if since_text else None
+                limit = events.parse_limit(limit_text)
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            try:
+                with self.state_lock:
+                    moment = dt.datetime.now(dt.timezone.utc)
+                    state = load_state(self.cfg)
+                    page, next_since, changed = events.select(state, since, limit, moment, since_text)
+                    if changed:
+                        save_state(self.cfg, state)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"events": page, "next_since": next_since})
 
         def _question_payload(self, payload):
             """Stamp the Robbins day from the current-location zone, not the browser."""
@@ -611,6 +665,9 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             if not write and path == "/api/decisions":
                 self._decision_list()
+                return
+            if not write and path == "/api/events":
+                self._event_list()
                 return
             result_match = re.fullmatch(r"/api/decisions/([^/]+)/result", path)
             if write and result_match:

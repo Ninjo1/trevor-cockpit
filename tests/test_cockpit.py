@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, ROOT)
 
 import decisions
+import events
 import render
 import store
 import voice
@@ -1405,6 +1406,255 @@ class DecisionTests(HttpCase):
         self.assertIn("Failed", text)
         self.assertIn("Mailbox was locked", text)
         self.assertIn("Nothing is sent until you confirm in chat.", text)
+
+
+class EventTests(HttpCase):
+    def _post(self, path, payload, auth=True):
+        return self.request(
+            path,
+            method="POST",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            auth=auth,
+        )
+
+    def _events(self):
+        status, _headers, raw = self.request("/api/events", auth="Bearer pickup-secret")
+        self.assertEqual(status, 200, raw)
+        body = json.loads(raw)
+        self.assertIn("next_since", body)
+        return body["events"], body["next_since"]
+
+    def test_actions_record_labels_without_notes(self):
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self._post("/api/todo/toggle", {"id": "S-now-1", "done": True, "notes": "Hidden sample note text"})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/todo/toggle", {"id": "S-now-1", "done": False})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/snooze", {"id": "S-open-1", "kind": "todo", "until": "2099-01-01"})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/snooze", {"id": "S-open-1", "kind": "todo", "clear": True})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/todo/quadrant", {"id": "S-now-1", "quadrant": "delete"})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post(
+            "/api/email/handled",
+            {"id": "S-mail-1", "handled": True, "body": "Asking for a sample date. Not a real inbox."},
+        )
+        self.assertEqual(status, 200, raw)
+        qid = render.question_id("morning", "What am I committed to today?")
+        status, _headers, raw = self._post("/api/question/toggle", {"id": qid, "done": True, "day": "1999-01-01"})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/events", {"type": "task_tick", "item_id": "S-now-1", "data": {"note": "nope"}})
+        self.assertEqual(status, 400, raw)
+        status, _headers, raw = self._post(
+            "/api/events",
+            {
+                "type": "restaurant",
+                "label": "North Pier Cafe",
+                "kind": "eat",
+                "area": "Pier",
+                "place": "Sample Harbor",
+                "why": "Sample place near the demo dock. Quiet enough to review a checklist.",
+            },
+        )
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self._post("/api/events", {"type": "filter", "area": "Echandia"})
+        self.assertEqual(status, 200, raw)
+        board = {
+            "items": [{
+                "id": "M1", "title": "Harbor reply", "area": "Echandia", "kind": "email", "section": "now",
+                "due": "", "done": False, "note": "Do not copy this email body.",
+                "links": [{"kind": "draft", "url": "https://outlook.office.com/mail/drafts/harbor"}],
+            }],
+            "calendar": [],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+        with open(os.path.join(self.tmp.name, "data.json"), "w", encoding="utf-8") as handle:
+            json.dump(board, handle)
+        status, _headers, raw = self._post(
+            "/api/decisions",
+            {"type": "draft", "target": "https://outlook.office.com/mail/drafts/harbor", "choice": "approve"},
+        )
+        self.assertEqual(status, 200, raw)
+        decision_id = json.loads(raw)["result"]["id"]
+        status, _headers, raw = self._post(
+            "/api/decisions",
+            {"type": "draft", "target": "https://outlook.office.com/mail/drafts/harbor", "undo": True},
+        )
+        self.assertEqual(status, 200, raw)
+
+        rows, _next = self._events()
+        by_type = {}
+        for row in rows:
+            by_type.setdefault(row["type"], []).append(row)
+        self.assertEqual([row["data"]["done"] for row in by_type["task_tick"]], [True, False])
+        self.assertEqual(by_type["task_tick"][0]["item_id"], "S-now-1")
+        self.assertEqual(by_type["task_tick"][0]["area"], "Echandia")
+        self.assertEqual(by_type["task_tick"][0]["data"]["label"], "Sample: confirm the harbor demo checklist")
+        self.assertEqual(by_type["snooze"][0]["data"]["until"], "2099-01-01")
+        self.assertIsNone(by_type["snooze"][1]["data"]["until"])
+        self.assertEqual(by_type["snooze"][0]["data"]["kind"], "todo")
+        move = by_type["quadrant"][0]
+        self.assertEqual(move["data"]["from"], "do_now")
+        self.assertEqual(move["data"]["to"], "delete")
+        self.assertEqual(by_type["email_handled"][0]["item_id"], "S-mail-1")
+        self.assertTrue(by_type["email_handled"][0]["data"]["handled"])
+        self.assertEqual(by_type["email_handled"][0]["data"]["label"], "Sample email: reply to demo.sender@example.com")
+        robbins = by_type["robbins"][0]
+        self.assertEqual(robbins["item_id"], qid)
+        self.assertEqual(robbins["data"]["section"], "morning")
+        self.assertEqual(robbins["data"]["label"], "What am I committed to today?")
+        self.assertNotEqual(robbins["data"]["day"], "1999-01-01")
+        self.assertTrue(robbins["data"]["done"])
+        restaurant = by_type["restaurant"][0]
+        self.assertEqual(restaurant["data"]["label"], "North Pier Cafe")
+        self.assertEqual(restaurant["data"]["kind"], "eat")
+        self.assertEqual(restaurant["area"], "Pier")
+        self.assertNotIn("item_id", restaurant)
+        self.assertEqual(by_type["filter"][0]["area"], "Echandia")
+        self.assertEqual(by_type["filter"][0]["data"]["area"], "Echandia")
+        taps = by_type["decision"]
+        self.assertEqual(taps[0]["data"]["choice"], "approve")
+        self.assertEqual(taps[0]["data"]["decision_type"], "draft")
+        self.assertEqual(taps[0]["data"]["target"], "https://outlook.office.com/mail/drafts/harbor")
+        self.assertEqual(taps[0]["data"]["decision_id"], decision_id)
+        self.assertEqual(taps[0]["item_id"], "M1")
+        self.assertEqual(taps[0]["data"]["label"], "Harbor reply")
+        self.assertTrue(taps[1]["data"]["undo"])
+        self.assertEqual(taps[1]["data"]["choice"], "approve")
+        blob = json.dumps(rows)
+        for secret in (
+            "Hidden sample note text",
+            "Fake task for local development.",
+            "Asking for a sample date. Not a real inbox.",
+            "Do not copy this email body.",
+            "Practice the board without real data.",
+            "Sample place near the demo dock",
+        ):
+            self.assertNotIn(secret, blob)
+        for row in rows:
+            self.assertTrue(row["id"].startswith("E-"))
+            self.assertRegex(row["ts"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+            self.assertNotIn("note", row["data"])
+            self.assertNotIn("notes", row["data"])
+            self.assertNotIn("body", row["data"])
+            self.assertNotIn("why", row["data"])
+        status, _headers, raw = self.request("/api/state", auth="Bearer " + self.token)
+        remote = json.loads(raw)
+        self.assertNotIn("events", remote)
+        self.assertNotIn("log", remote)
+
+    def test_pickup_auth_paging_and_retention(self):
+        status, _headers, raw = self.request("/api/events")
+        self.assertEqual(status, 503, raw)
+        self.assertIn(b"VOICE_PICKUP_TOKEN is unset", raw)
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self.request("/api/events")
+        self.assertEqual(status, 401, raw)
+        status, _headers, raw = self.request("/api/events", auth="Bearer no")
+        self.assertEqual(status, 401, raw)
+        status, _headers, raw = self.request("/api/events?since=yesterday", auth="Bearer pickup-secret")
+        self.assertEqual(status, 400, raw)
+        status, _headers, raw = self.request("/api/events?limit=5001", auth="Bearer pickup-secret")
+        self.assertEqual(status, 400, raw)
+        status, _headers, raw = self._post(
+            "/api/events",
+            {"type": "filter", "area": "Personal"},
+            auth=False,
+        )
+        self.assertEqual(status, 401, raw)
+        status, _headers, raw = self.request(
+            "/api/events",
+            method="POST",
+            data=b'{"type":"filter","area":"FiFi4"}',
+            headers={"Content-Type": "application/json", "Origin": "https://evil.example"},
+        )
+        self.assertEqual(status, 403, raw)
+        for area in ("All", "Echandia", "Personal"):
+            status, _headers, raw = self._post("/api/events", {"type": "filter", "area": area})
+            self.assertEqual(status, 200, raw)
+        first, cursor = self._events()
+        self.assertEqual([row["data"]["area"] for row in first], ["All", "Echandia", "Personal"])
+        seen = []
+        walk = ""
+        for _ in range(6):
+            path = "/api/events?limit=1" + (("&since=" + walk) if walk else "")
+            status, _headers, raw = self.request(path, auth="Bearer pickup-secret")
+            body = json.loads(raw)
+            if not body["events"]:
+                break
+            for row in body["events"]:
+                self.assertNotIn(row["id"], seen)
+                seen.append(row["id"])
+            self.assertNotEqual(body["next_since"], walk)
+            walk = body["next_since"]
+        self.assertEqual(seen, [row["id"] for row in first])
+        status, _headers, raw = self.request(
+            "/api/events?since=" + cursor,
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(json.loads(raw)["events"], [])
+        self.assertEqual(json.loads(raw)["next_since"], cursor)
+        moment = dt.datetime.now(dt.timezone.utc)
+        state = fresh_state()
+        state["events"] = [
+            {"id": "E-oldoldoldold", "ts": events.stamp(moment - dt.timedelta(days=181)), "type": "filter", "area": "All", "data": {"area": "All"}},
+            {"id": "E-keptkeptkept", "ts": events.stamp(moment), "type": "filter", "area": "All", "data": {"area": "All"}},
+        ]
+        store.atomic_write_json(os.path.join(self.tmp.name, "state.json"), state)
+        status, _headers, raw = self.request("/api/events?limit=10", auth="Bearer pickup-secret")
+        kept = json.loads(raw)["events"]
+        self.assertEqual([row["id"] for row in kept], ["E-keptkeptkept"])
+        stored = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertEqual([row["id"] for row in stored["events"]], ["E-keptkeptkept"])
+
+    def test_retention_boundary_and_same_second_page(self):
+        now = dt.datetime(2026, 11, 1, 12, tzinfo=dt.timezone.utc)
+        state = {"events": [
+            {"id": "E-toooldoldold", "ts": events.stamp(now - dt.timedelta(days=180, seconds=1)), "type": "filter", "area": "All", "data": {"area": "All"}},
+            {"id": "E-edgeedgeedge", "ts": events.stamp(now - dt.timedelta(days=180)), "type": "filter", "area": "All", "data": {"area": "All"}},
+        ]}
+        self.assertTrue(events.prune(state, now))
+        self.assertEqual([row["id"] for row in state["events"]], ["E-edgeedgeedge"])
+        shared = events.stamp(now)
+        later = events.stamp(now + dt.timedelta(seconds=2))
+        state = {"events": [
+            {"id": "E-aaaaaaaaaaaa", "ts": shared, "type": "filter", "area": "All", "data": {"area": "All"}},
+            {"id": "E-bbbbbbbbbbbb", "ts": shared, "type": "filter", "area": "Echandia", "data": {"area": "Echandia"}},
+            {"id": "E-cccccccccccc", "ts": later, "type": "filter", "area": "Personal", "data": {"area": "Personal"}},
+        ]}
+        page, nxt, _changed = events.select(state, None, 2, now)
+        self.assertEqual([row["id"] for row in page], ["E-aaaaaaaaaaaa", "E-bbbbbbbbbbbb"])
+        self.assertEqual(nxt, shared)
+        rest, _nxt, _changed = events.select(state, events.parse_time(shared), 2, now, shared)
+        self.assertEqual([row["id"] for row in rest], ["E-cccccccccccc"])
+        split = {"events": [
+            {"id": "E-111111111111", "ts": shared, "type": "filter", "area": "All", "data": {"area": "All"}},
+            {"id": "E-222222222222", "ts": later, "type": "filter", "area": "Echandia", "data": {"area": "Echandia"}},
+            {"id": "E-333333333333", "ts": later, "type": "filter", "area": "Personal", "data": {"area": "Personal"}},
+        ]}
+        page, nxt, _changed = events.select(split, None, 2, now)
+        self.assertEqual([row["id"] for row in page], ["E-111111111111"])
+        self.assertEqual(nxt, shared)
+        rest, _nxt, _changed = events.select(split, events.parse_time(nxt), 2, now, nxt)
+        self.assertEqual([row["id"] for row in rest], ["E-222222222222", "E-333333333333"])
+
+    def test_restaurant_link_markup_is_unchanged_aside_from_log_fields(self):
+        data = json.load(open(SAMPLE, encoding="utf-8"))
+        html, _counts, _jarvis = render.render_main(data, fresh_state(), today=dt.date(2026, 10, 30))
+        self.assertIn('href="https://example.com/maps/north-pier-cafe"', html)
+        self.assertIn('data-rkind="eat"', html)
+        self.assertIn('data-rlabel="North Pier Cafe"', html)
+        self.assertIn('data-rarea="Pier"', html)
+        self.assertIn(">Map</a>", html)
+        self.assertIn('data-rkind="delivery"', html)
+        self.assertIn('data-rlabel="Harbor Bowl"', html)
+        self.assertNotIn('data-rlabel="Sample place', html)
+        self.assertNotIn("<h2>Events", html)
+        script = open(os.path.join(ROOT, "app.html"), encoding="utf-8").read()
+        self.assertIn('type: "filter"', script)
+        self.assertIn('type: "restaurant"', script)
 
 
 if __name__ == "__main__":
