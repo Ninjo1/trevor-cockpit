@@ -36,8 +36,8 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
-| `HOME_TZ` | Render dashboard | Fallback IANA zone for the Here clock when the device zone is unknown and the payload has no location for today. Example: `Asia/Bangkok` |
-| `HOME_LABEL` | Render dashboard, optional | City name for that fallback. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
+| `HOME_TZ` | Render dashboard | Current location, the Here clock, not Vancouver. Vancouver is always the Home clock. These names stay as they are. Robbins questions reset at midnight in this zone, or in today's payload location zone when that place includes a time zone. If neither is set, that reset uses Asia/Bangkok. Example: `Asia/Bangkok` |
+| `HOME_LABEL` | Render dashboard, optional | City name for the current location. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok). This is not the Vancouver home label |
 | `DISPLAY_TZ` | Render dashboard | Zone for calendar times, which day an event falls on, due badges, and the refreshed line. If empty, `HOME_TZ` is used, then `America/Vancouver` |
 
 One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
@@ -115,9 +115,11 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 | `due` | `YYYY-MM-DD` or `""` |
 | `priority` | `low` or null |
 | `done` | bool. A tick in `state.json` wins over this |
-| `note`, `done_note` | strings |
+| `note`, `done_note` | strings. The note is one line until tapped, then it expands. This is a tap, not a hover |
+| `webLink` | Outlook message URL. Any email-sourced item (kind `email` or `draft`, or a `webLink` / Outlook link on another kind) renders Open email |
 | `ledger_ids`, `refs` | lists of strings |
-| `links` | `[{label, href, kind}]`. `kind` may be `clickup`, `outlook`, `teams`, `calendar`, `mail`, or `web` |
+| `links` | `[{label, href, kind}]`. `kind` may be `clickup`, `outlook`, `teams`, `calendar`, `mail`, `web`, or `draft`. A draft link is `{kind: "draft", url, label optional}` and `url` must be http or https. When present, the row leads with Draft ready. When absent, that link is omitted |
+| `attachments` | Optional `[{name, url}]`. `url` must be http or https. `name` is at most 80 characters. Old payloads without this field still validate. Each file is a link on the same line as the other links. More than three files show the first three and `+N more` |
 
 Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, mail, and money.
 
@@ -137,7 +139,7 @@ Optional:
 | `sources` | `{connected: [...], needed: [...]}` |
 | `weather_places` | `[{name, lat, lon}]`. The server asks Open-Meteo for current conditions, today's high and low, and a 3-day outlook, in C and km/h. Outlook days read Today, Tomorrow, or a short date such as Sun Nov 1. Cached about 30 minutes. A failed fetch shows "weather unavailable" and the rest of the page still loads. Omit the key to hide the card |
 | `travel` | `[{id, kind, title, start, end, from, to, confirmation, details, status, url}]`. `kind` is `flight`, `hotel`, `car`, `train`, or `other`. `start` and `end` are ISO 8601 with an offset. Next up lists items whose end has not passed, soonest first, five at a time, with Show all for the rest. A midnight time is the date only. A hotel is Check-in and Check-out dates. The same start and end show once. Long details sit behind Details. Times use the item's own zone, plus `DISPLAY_TZ` when those differ. A flight departing within 24 hours is marked check-in open. `url` is the link |
-| `upgrades` | `[{flight, date, route, requested_cabin, status, position, checked_at, url}]`. A small card with status and when it was last checked. `url` is the link |
+| `upgrades` | `[{flight, date, route, requested_cabin, status, position, checked_at, url}]`. Each row is a line inside Next up. It attaches to the trip with the same flight number, or the same route and date. Anything that does not match still appears in that card. Status, position, cabin, route, date, link, and the checked time all stay. Omit the key, or send an empty list, and no upgrade line is shown |
 
 Calendar events may also include `join_url` (Teams, Zoom, or Meet). Today's card lists meetings for today and the next 24 hours in `DISPLAY_TZ`, with a Join link when `join_url` or `join` is set, and the Vancouver time in small text. Omit any of these keys and that card stays hidden. A wrong type is rejected and the previous file is kept.
 

@@ -59,7 +59,12 @@ def resolve_display(env=None):
 
 
 def home_clock(env=None):
-    """Return (label, iana key) for the current-location clock."""
+    """Return (label, iana key) for the current-location clock.
+
+    HOME_TZ and HOME_LABEL are Trevor's current location, the Here clock,
+    not his home. Vancouver is always the Home clock. Do not rename these
+    env vars.
+    """
     env = _env(env)
     chosen = parse_zone(env.get("HOME_TZ")) or ZoneInfo(FALLBACK_ZONE)
     key = getattr(chosen, "key", None) or FALLBACK_ZONE
@@ -113,7 +118,11 @@ def payload_here(data, today=None):
 
 
 def here_fallback(env=None, data=None, today=None):
-    """Where you are when the device zone is unknown."""
+    """Where you are when the device zone is unknown.
+
+    Payload location, then HOME_TZ. HOME_TZ is the current location, not
+    the Vancouver Home clock.
+    """
     found = payload_here(data, today)
     if found:
         return found
@@ -121,6 +130,50 @@ def here_fallback(env=None, data=None, today=None):
     if parse_zone(env.get("HOME_TZ")):
         return home_clock(env)
     return "Vancouver", FALLBACK_ZONE
+
+
+def ritual_zone(env=None, data=None, moment=None):
+    """Zone whose midnight resets the Robbins questions.
+
+    This is the current-location zone the Here clock is built from: today's
+    payload location when it includes a time zone, otherwise HOME_TZ.
+    HOME_TZ is the current location, not Vancouver. The browser zone is not
+    used, and the pinned Vancouver Home clock is not used. If neither the
+    payload nor HOME_TZ names a zone, the fallback is Asia/Bangkok.
+    """
+    env = _env(env)
+    moment = moment or dt.datetime.now(dt.timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    home = parse_zone(env.get("HOME_TZ"))
+    provisional = home or ZoneInfo("Asia/Bangkok")
+    found = payload_here(data, moment.astimezone(provisional).date())
+    if found:
+        zone = parse_zone(found[1])
+        if zone:
+            return zone
+    if home:
+        return home
+    return ZoneInfo("Asia/Bangkok")
+
+
+def ritual_day(env=None, data=None, moment=None):
+    """Return (YYYY-MM-DD, IANA key) for the Robbins day."""
+    moment = moment or dt.datetime.now(dt.timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    zone = ritual_zone(env, data, moment)
+    key = getattr(zone, "key", None) or "Asia/Bangkok"
+    return moment.astimezone(zone).date().isoformat(), key
+
+
+def question_id(section, text):
+    """Stable id from the section and the question text, not the list index."""
+    raw = clean_text(text)
+    digest = hashlib.sha256(f"{section}\n{raw}".encode("utf-8")).hexdigest()[:10]
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:32]
+    ident = f"{section}-{slug}-{digest}" if slug else f"{section}-{digest}"
+    return ident[:81]
 
 
 def clock_rows(env=None, data=None, today=None):
@@ -255,6 +308,9 @@ def merged(data, state):
                 "note": note,
                 "custom": False,
                 "quadrant": overlay.get("quadrant") or item.get("quadrant"),
+                "quadrant_manual": overlay.get("quadrant") in ("do_now", "schedule", "delegate", "delete"),
+                "webLink": item.get("webLink") or "",
+                "attachments": item.get("attachments") if isinstance(item.get("attachments"), list) else [],
                 "important": item.get("important") if item.get("important") is not None else overlay.get("important"),
                 "owner": overlay.get("owner") or item.get("owner") or "",
             }
@@ -282,6 +338,9 @@ def merged(data, state):
                 "note": custom.get("notes") or "",
                 "custom": True,
                 "quadrant": overlay.get("quadrant") or custom.get("quadrant"),
+                "quadrant_manual": overlay.get("quadrant") in ("do_now", "schedule", "delegate", "delete"),
+                "webLink": "",
+                "attachments": [],
                 "important": custom.get("important"),
                 "owner": custom.get("owner") or "",
             }
@@ -304,6 +363,127 @@ def due_badge(due, today):
     if delta == -1:
         return '<span class="b soon">Tomorrow</span>'
     return f'<span class="b">Due {e(day_label(day))}</span>'
+
+
+def _http_href(url):
+    href = safe_href(url)
+    if href and href.startswith("http"):
+        return href
+    return None
+
+
+def _short_label(text, limit=28):
+    raw = clean_text(text) or "File"
+    if len(raw) <= limit:
+        return raw
+    return raw[: limit - 3].rstrip() + "..."
+
+
+def _anchor(href, label, css=""):
+    klass = f' class="{css}"' if css else ""
+    return (
+        f'<a{klass} href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{e(label)}</a>'
+    )
+
+
+def _description_links(links):
+    """ClickUp or Notion links that point at the full description."""
+    found = []
+    for link in links:
+        if not isinstance(link, dict) or link.get("kind") == "draft":
+            continue
+        href = _http_href(link.get("href") or link.get("url"))
+        if not href:
+            continue
+        lowered = href.lower()
+        kind = link.get("kind")
+        if kind in ("clickup", "notion") or "clickup.com" in lowered or "notion.so" in lowered or "notion.site" in lowered:
+            found.append((href, link.get("label") or ("Notion" if "notion." in lowered else "ClickUp")))
+    return found
+
+
+def _open_email_href(item, links):
+    direct = _http_href(item.get("webLink"))
+    if direct:
+        return direct
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        if link.get("kind") not in ("outlook", "mail", "email"):
+            continue
+        href = _http_href(link.get("href") or link.get("url"))
+        if href:
+            return href
+    if item.get("kind") in ("email", "draft"):
+        for link in links:
+            if not isinstance(link, dict) or link.get("kind") == "draft":
+                continue
+            href = _http_href(link.get("href") or link.get("url"))
+            lowered = (href or "").lower()
+            if href and ("outlook." in lowered or "/mail" in lowered):
+                return href
+    return None
+
+
+def row_links_html(item):
+    """One tight line: Draft ready, Open email, other links, then file names."""
+    links = [link for link in (item.get("links") or []) if isinstance(link, dict)]
+    parts = []
+    for link in links:
+        if link.get("kind") != "draft":
+            continue
+        href = _http_href(link.get("url") or link.get("href"))
+        if href:
+            parts.append(_anchor(href, "Draft ready", "draftready"))
+            break
+    email_href = _open_email_href(item, links)
+    if email_href:
+        parts.append(_anchor(email_href, "Open email"))
+    used = {email_href} if email_href else set()
+    for href, label in _description_links(links):
+        if href in used:
+            continue
+        used.add(href)
+        parts.append(_anchor(href, label or "Description"))
+    for link in links:
+        if link.get("kind") in ("draft", "outlook", "mail", "email", "clickup", "notion"):
+            continue
+        href = _http_href(link.get("href") or link.get("url"))
+        if not href or href in used:
+            continue
+        lowered = href.lower()
+        if "clickup.com" in lowered or "notion.so" in lowered or "notion.site" in lowered or "outlook." in lowered:
+            continue
+        used.add(href)
+        parts.append(_anchor(href, link.get("label") or "Open"))
+    files = []
+    for row in item.get("attachments") or []:
+        if not isinstance(row, dict):
+            continue
+        href = _http_href(row.get("url"))
+        if not href:
+            continue
+        files.append(_anchor(href, _short_label(row.get("name") or "File"), "file"))
+    parts.extend(files[:3])
+    extra = files[3:]
+    if extra:
+        parts.append(
+            f'<details class="morefiles"><summary>+{len(extra)} more</summary>'
+            + '<span class="dot"> · </span>'.join(extra)
+            + "</details>"
+        )
+    if not parts:
+        return ""
+    return '<div class="rowlinks">' + '<span class="dot"> · </span>'.join(parts) + "</div>"
+
+
+def note_html(note):
+    text = e(note)
+    if not text:
+        return ""
+    return (
+        f'<details class="note"><summary><span class="noteline">{text}</span></summary></details>'
+    )
 
 
 def link_html(link):
@@ -360,8 +540,10 @@ def item_html(item, today, area_query):
         meta += f'<span class="refs">{e(" ".join(str(ref) for ref in refs))}</span>'
     if item.get("custom"):
         meta += '<span class="refs">Added by you</span>'
+    if not email:
+        meta += f'<span class="why">{e(quadrant_reason(item, today))}</span>'
     note = item.get("done_note") if item["done"] and item.get("done_note") else item.get("note")
-    links = "".join(link_html(link) for link in item.get("links") or [])
+    links = row_links_html(item)
     area_value = "" if area_query == "All" else area_query
     kind = "email" if email else "todo"
     edit = (
@@ -401,8 +583,8 @@ def item_html(item, today, area_query):
         f'{_hidden(field, nxt)}{_hidden("area", area_value)}'
         f'<button class="ck{" em" if email else ""}" type="submit" aria-label="{e(verb)}">{e(label)}</button></form>'
         f'<div class="bd"><div class="ttl">{e(item["title"])}</div><div class="meta">{meta}</div>'
-        + (f'<div class="nt">{e(note)}</div>' if note else "")
-        + (f'<div class="lks">{links}</div>' if links else "")
+        + (note_html(note) if note else "")
+        + links
         + (f'<div class="nt">Owner {e(item.get("owner"))}</div>' if item.get("owner") else "")
         + f'<div class="rowtools">{edit}{snooze}{move}</div></div></li>'
     )
@@ -715,12 +897,74 @@ def weather_card(rows, today=None):
     return f'<article class="card glance-card" id="weather"><h2>Weather</h2>{body}</article>'
 
 
-def travel_card(data, zone, zone_label, now):
-    rows = data.get("travel") if isinstance(data.get("travel"), list) else None
+def _flight_codes(text):
+    found = re.findall(r"\b([A-Za-z]{2})\s*(\d{2,4})\b", str(text or ""))
+    return {f"{airline.upper()}{number}" for airline, number in found}
+
+
+def _route_airports(route):
+    parts = re.split(r"[^A-Za-z]+", str(route or "").upper())
+    return [part for part in parts if len(part) == 3]
+
+
+def _upgrade_match(upgrade, trip, start):
+    """True when this upgrade belongs on this trip.
+
+    A flight number match wins. A route match also counts when the dates agree.
+    """
+    codes = _flight_codes(upgrade.get("flight"))
+    trip_codes = _flight_codes(trip.get("title")) | _flight_codes(trip.get("confirmation"))
+    date = str(upgrade.get("date") or "")[:10]
+    trip_date = start.date().isoformat() if start else ""
+    dated = not date or date == trip_date
+    if codes and codes & trip_codes and dated:
+        return True
+    airports = _route_airports(upgrade.get("route"))
+    if len(airports) >= 2 and date and date == trip_date:
+        origin = str(trip.get("from") or "").upper()
+        dest = str(trip.get("to") or "").upper()
+        if airports[0] in origin and airports[1] in dest:
+            return True
+    return False
+
+
+def _upgrade_html(row, zone):
+    title = _link_or_text(row.get("flight") or "Flight", row.get("url"))
+    bits = [e(part) for part in (row.get("date"), row.get("route"), row.get("requested_cabin")) if part]
+    checked = row.get("checked_at")
+    moment = utc(checked) if isinstance(checked, str) else None
+    if moment:
+        checked_text = "Checked " + day_label(moment.astimezone(zone).date()) + ", " + clock_time(moment.astimezone(zone))
+    elif checked:
+        checked_text = "Checked " + clean_text(checked)
+    else:
+        checked_text = ""
+    position = row.get("position")
+    pos = f"Position {position}" if position not in (None, "") else ""
+    return (
+        f'<div class="up"><div class="ttl">{title}</div>'
+        f'<div class="meta"><span class="b">{e(row.get("status") or "")}</span>'
+        + (f"<span>{e(pos)}</span>" if pos else "")
+        + "</div>"
+        + (f'<div class="nt">{" · ".join(bits)}</div>' if bits else "")
+        + (f'<div class="src">{e(checked_text)}</div>' if checked_text else "")
+        + "</div>"
+    )
+
+
+def _upgrade_rows(data):
+    rows = data.get("upgrades") if isinstance(data, dict) and isinstance(data.get("upgrades"), list) else None
     if not rows:
-        return ""
+        return []
+    kept = [row for row in rows if isinstance(row, dict)]
+    return kept[:12]
+
+
+def travel_card(data, zone, zone_label, now):
+    rows = data.get("travel") if isinstance(data, dict) and isinstance(data.get("travel"), list) else None
+    upgrades = _upgrade_rows(data)
     upcoming = []
-    for row in rows:
+    for row in rows or []:
         if not isinstance(row, dict):
             continue
         end = utc(row.get("end"))
@@ -729,10 +973,22 @@ def travel_card(data, zone, zone_label, now):
             continue
         upcoming.append((start or end or now, row, start, end))
     upcoming.sort(key=lambda item: item[0])
-    if not upcoming:
+    if not upcoming and not upgrades:
         return ""
+    assigned = {index: [] for index in range(len(upcoming))}
+    loose = []
+    for upgrade in upgrades:
+        match_at = None
+        for index, (_sort, trip, start, _end) in enumerate(upcoming):
+            if _upgrade_match(upgrade, trip, start):
+                match_at = index
+                break
+        if match_at is None:
+            loose.append(upgrade)
+        else:
+            assigned[match_at].append(upgrade)
 
-    def one_trip(row, start, end):
+    def one_trip(index, row, start, end):
         kind = row.get("kind") or "other"
         route = " to ".join(part for part in (clean_text(row.get("from")), clean_text(row.get("to"))) if part)
         times = _travel_times(kind, start, end, zone, zone_label)
@@ -755,6 +1011,7 @@ def travel_card(data, zone, zone_label, now):
                 extra += f'<details class="fold"><summary>Details</summary><div class="nt">{e(details)}</div></details>'
             else:
                 extra += f'<div class="nt">{e(details)}</div>'
+        extra += "".join(_upgrade_html(item, zone) for item in assigned[index])
         return (
             f'<div class="trip"><div class="meta"><span class="tag">{e(kind)}</span>{"".join(flags)}</div>'
             f'<div class="ttl">{title}</div>'
@@ -764,8 +1021,10 @@ def travel_card(data, zone, zone_label, now):
             + "</div>"
         )
 
-    shown = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[:5])
-    hidden = "".join(one_trip(row, start, end) for _sort, row, start, end in upcoming[5:])
+    shown = "".join(one_trip(index, row, start, end) for index, (_sort, row, start, end) in enumerate(upcoming[:5]))
+    hidden = "".join(one_trip(index, row, start, end) for index, (_sort, row, start, end) in enumerate(upcoming[5:], start=5))
+    if loose:
+        shown += "".join(_upgrade_html(item, zone) for item in loose)
     if hidden:
         shown += f'<details class="fold"><summary>Show all</summary>{hidden}</details>'
     return f'<article class="card glance-card" id="next-up"><h2>Next up</h2>{shown}</article>'
@@ -829,44 +1088,6 @@ def today_meetings_card(data, zone, zone_label, now):
     return body
 
 
-def upgrades_card(data, zone):
-    rows = data.get("upgrades") if isinstance(data.get("upgrades"), list) else None
-    if not rows:
-        return ""
-    body = ""
-    shown = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        shown += 1
-        if shown > 12:
-            break
-        title = _link_or_text(row.get("flight") or "Flight", row.get("url"))
-        bits = [e(part) for part in (row.get("date"), row.get("route"), row.get("requested_cabin")) if part]
-        checked = row.get("checked_at")
-        moment = utc(checked) if isinstance(checked, str) else None
-        if moment:
-            checked_text = "Checked " + day_label(moment.astimezone(zone).date()) + ", " + clock_time(moment.astimezone(zone))
-        elif checked:
-            checked_text = "Checked " + clean_text(checked)
-        else:
-            checked_text = ""
-        position = row.get("position")
-        pos = f"Position {position}" if position not in (None, "") else ""
-        body += (
-            f'<div class="up"><div class="ttl">{title}</div>'
-            f'<div class="meta"><span class="b">{e(row.get("status") or "")}</span>'
-            + (f"<span>{e(pos)}</span>" if pos else "")
-            + "</div>"
-            + (f'<div class="nt">{" · ".join(bits)}</div>' if bits else "")
-            + (f'<div class="src">{e(checked_text)}</div>' if checked_text else "")
-            + "</div>"
-        )
-    if not body:
-        return ""
-    return f'<article class="card glance-card" id="upgrades"><h2>Upgrades</h2>{body}</article>'
-
-
 def glance_html(data, zone, zone_label, weather=None, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if now.tzinfo is None:
@@ -885,7 +1106,6 @@ def glance_html(data, zone, zone_label, weather=None, now=None):
         cards.append(weather_card(weather_rows or [{"name": "", "unavailable": True}], now.astimezone(zone).date()))
     if isinstance(data, dict):
         cards.append(travel_card(data, zone, zone_label, now))
-        cards.append(upgrades_card(data, zone))
     cards = [card for card in cards if card]
     if not cards:
         return ""
@@ -1079,7 +1299,33 @@ DEFAULT_ROBBINS = {
 }
 
 
-def principles_html(data, delete_count=0):
+def question_list(title, section, values, checked):
+    if not isinstance(values, list) or not values:
+        return ""
+    rows = ""
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        qid = question_id(section, item)
+        entry = checked.get(qid) if isinstance(checked, dict) else None
+        done = bool(entry.get("done")) if isinstance(entry, dict) else False
+        nxt = "0" if done else "1"
+        label = "Undo" if done else "Done"
+        pressed = "true" if done else "false"
+        rows += (
+            f'<li class="q{" done" if done else ""}">'
+            f'<form class="qform" method="post" action="form/question/toggle">'
+            f'{_hidden("id", qid)}{_hidden("done", nxt)}'
+            f'<button class="ck qck" type="submit" aria-pressed="{pressed}">{e(label)}</button>'
+            f'<span class="qtext">{e(item)}</span></form></li>'
+        )
+    if not rows:
+        return ""
+    return f'<div class="lab">{e(title)}</div><ul class="qs">{rows}</ul>'
+
+
+def principles_html(data, delete_count=0, checked=None):
+    checked = checked if isinstance(checked, dict) else {}
     principles = data.get("principles") if isinstance(data.get("principles"), dict) else {}
     if "principles" not in (data or {}) or not principles:
         musk, robbins = DEFAULT_MUSK, DEFAULT_ROBBINS
@@ -1126,9 +1372,9 @@ def principles_html(data, delete_count=0):
             html_out += f'<p><b>Kaizen, today\'s 1 percent.</b> {e(robbins["kaizen"])}</p>'
         html_out += "</article><article class=\"card\">"
         if robbins.get("morning"):
-            html_out += '<div class="lab">Morning questions</div>' + bullets(robbins.get("morning"))
+            html_out += question_list("Morning questions", "morning", robbins.get("morning"), checked)
         if robbins.get("evening"):
-            html_out += '<div class="lab">Evening questions</div>' + bullets(robbins.get("evening"))
+            html_out += question_list("Evening questions", "evening", robbins.get("evening"), checked)
         if robbins.get("values"):
             html_out += '<div class="lab">Top values</div>' + bullets(robbins.get("values"), ordered=True)
         html_out += "</article>"
@@ -1208,19 +1454,26 @@ QUAD_LABELS = {
 }
 
 
-def derive_quadrant(item, today):
-    explicit = item.get("quadrant")
-    if explicit in QUADRANTS:
-        return explicit
+def _quadrant_signals(item, today):
+    """Same importance and urgency signals derive_quadrant uses."""
     due = item.get("due") or ""
     important = item.get("important") is True or item.get("priority") in ("high", "urgent") or item.get("section") == "now"
     urgent = item.get("section") == "now"
+    days = None
     if due:
         try:
             days = (dt.date.fromisoformat(due) - today).days
             urgent = urgent or days <= 2
         except ValueError:
-            pass
+            due = ""
+    return important, urgent, due, days
+
+
+def derive_quadrant(item, today):
+    explicit = item.get("quadrant")
+    if explicit in QUADRANTS:
+        return explicit
+    important, urgent, due, _days = _quadrant_signals(item, today)
     owner = item.get("owner") or ""
     if owner and not important:
         return "delegate"
@@ -1233,6 +1486,37 @@ def derive_quadrant(item, today):
     if urgent:
         return "delegate"
     return "delete"
+
+
+def quadrant_reason(item, today):
+    """One short line for why a task sits in its quadrant. No dashes."""
+    if item.get("quadrant_manual"):
+        return "Moved manually"
+    important, urgent, due, days = _quadrant_signals(item, today)
+    if important:
+        lead = "Important"
+    elif urgent:
+        lead = "Urgent"
+    else:
+        lead = "Not urgent"
+    if not due or days is None:
+        if important and urgent:
+            return "Important, urgent"
+        if urgent:
+            return "Urgent, no due date"
+        if important:
+            return "Important, no due date"
+        return "Not urgent, no due date"
+    if days < 0:
+        count = -days
+        timing = f"overdue {count} day" if count == 1 else f"overdue {count} days"
+    elif days == 0:
+        timing = "due today"
+    elif days == 1:
+        timing = "due in 1 day"
+    else:
+        timing = f"due in {days} days"
+    return f"{lead}, {timing}"
 
 
 def freshness_class(generated, now):
@@ -1398,7 +1682,7 @@ def waiting_html(data, state, today, area):
     )
 
 
-def render_main(data, state, area="All", today=None, zone=None, zone_label=None, weather=None, now=None, rates=None):
+def render_main(data, state, area="All", today=None, zone=None, zone_label=None, weather=None, now=None, rates=None, env=None):
     if zone is None:
         zone, zone_label = resolve_display()
     elif not zone_label:
@@ -1447,7 +1731,10 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
         html_out += f'<details class="keep"><summary>Snoozed ({len(snoozed)})</summary>' + list_html(snoozed, today, area, False) + "</details>"
     html_out += f'<details id="donebox" class="keep"><summary>Done ({len(done)})</summary>' + list_html(done, today, area, False) + "</details>"
     html_out += money_html(data, today, area)
-    html_out += principles_html(data, delete_count)
+    ritual, _ritual_zone = ritual_day(env, data, clock)
+    questions = (state or {}).get("questions") if isinstance(state, dict) else None
+    checked = questions.get(ritual) if isinstance(questions, dict) else None
+    html_out += principles_html(data, delete_count, checked if isinstance(checked, dict) else {})
     generated = utc(data.get("generated_at")) if isinstance(data, dict) else None
     if generated:
         local = generated.astimezone(zone)
@@ -1552,7 +1839,7 @@ def fill(template, data, state, area="All", today=None, env=None, weather=None, 
     if getattr(moment, "tzinfo", None) is None:
         moment = moment.replace(tzinfo=dt.timezone.utc)
     main, counts, jarvis = render_main(
-        data, state, area, today=today, zone=zone, zone_label=zone_label, weather=weather, now=moment, rates=rates
+        data, state, area, today=today, zone=zone, zone_label=zone_label, weather=weather, now=moment, rates=rates, env=env
     )
     clock_day = today or moment.astimezone(zone).date()
     generated = utc((data or {}).get("generated_at")) if isinstance(data, dict) else None

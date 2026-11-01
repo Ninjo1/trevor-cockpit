@@ -146,6 +146,26 @@ def apply(state, op, body, now_iso):
             entry = custom if custom is not None else _entry(todos, item_id)
         entry["snooze"] = until
         return {"id": item_id, "snooze": until}
+    if op == "question/toggle":
+        item_id = check_id(body.get("id"))
+        day = body.get("day")
+        if not isinstance(day, str) or not DUE.fullmatch(day):
+            raise ValueError("day must be YYYY-MM-DD")
+        if "done" not in body:
+            raise ValueError("done is required")
+        questions = state.get("questions")
+        if not isinstance(questions, dict):
+            questions = {}
+            state["questions"] = questions
+        bucket = questions.get(day)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            questions[day] = bucket
+        entry = _entry(bucket, item_id)
+        done = bool(body["done"])
+        entry["done"] = done
+        entry["done_at"] = now_iso if done else None
+        return {"id": item_id, "done": done, "day": day}
     raise KeyError(op)
 
 
@@ -153,7 +173,7 @@ def brief_log(op, body, now_iso):
     """A short audit line. Notes are not copied into the log."""
     brief = {}
     if isinstance(body, dict):
-        for key in ("id", "done", "handled", "area", "due", "until", "kind", "quadrant"):
+        for key in ("id", "done", "handled", "area", "due", "until", "kind", "quadrant", "day"):
             if key in body:
                 brief[key] = body[key]
         if op == "todo/add" and isinstance(body.get("title"), str):
