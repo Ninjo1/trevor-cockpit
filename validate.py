@@ -80,6 +80,28 @@ def validate_data(obj):
     return obj
 
 
+def _http_url(value, field):
+    if not isinstance(value, str) or not (value.startswith("https://") or value.startswith("http://")):
+        raise ValueError(f"{field} must be an http or https url")
+    if any(char in value for char in " \n\r\t\"<>"):
+        raise ValueError(f"{field} must be an http or https url")
+
+
+def _attachments(rows, index):
+    if not isinstance(rows, list):
+        raise ValueError(f"items[{index}].attachments must be a list")
+    if len(rows) > 20:
+        raise ValueError(f"items[{index}].attachments is too long")
+    for att_index, row in enumerate(rows):
+        field = f"items[{index}].attachments[{att_index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{field} must be an object")
+        name = row.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 80:
+            raise ValueError(f"{field}.name must be a string of at most 80 characters")
+        _http_url(row.get("url"), f"{field}.url")
+
+
 def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -157,12 +179,21 @@ def _items(items):
             if not isinstance(item["links"], list):
                 raise ValueError(f"items[{index}].links must be a list")
             for link_index, link in enumerate(item["links"]):
+                field = f"items[{index}].links[{link_index}]"
                 if not isinstance(link, dict):
-                    raise ValueError(f"items[{index}].links[{link_index}] must be an object")
-                if "href" in link and not isinstance(link["href"], str):
-                    raise ValueError(f"items[{index}].links[{link_index}].href must be a string")
-                if "label" in link and not isinstance(link["label"], str):
-                    raise ValueError(f"items[{index}].links[{link_index}].label must be a string")
+                    raise ValueError(f"{field} must be an object")
+                if "href" in link and link["href"] is not None and not isinstance(link["href"], str):
+                    raise ValueError(f"{field}.href must be a string")
+                if "url" in link and link["url"] is not None and not isinstance(link["url"], str):
+                    raise ValueError(f"{field}.url must be a string")
+                if "label" in link and link["label"] is not None and not isinstance(link["label"], str):
+                    raise ValueError(f"{field}.label must be a string")
+                if link.get("kind") == "draft":
+                    _http_url(link.get("url") or link.get("href"), f"{field}.url")
+        if "attachments" in item and item["attachments"] is not None:
+            _attachments(item["attachments"], index)
+        if "webLink" in item and item["webLink"] is not None and not isinstance(item["webLink"], str):
+            raise ValueError(f"items[{index}].webLink must be a string")
         if item.get("area") and item["area"] not in AREAS_HINT and len(item["area"]) > 40:
             raise ValueError(f"items[{index}].area is too long")
 

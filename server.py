@@ -310,11 +310,24 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self._json(400, {"ok": False, "error": "body is not JSON"})
                 return
+            if op == "question/toggle":
+                payload = self._question_payload(payload)
             status, result = self._mutate(op, payload)
             if status != 200:
                 self._json(status, {"ok": False, "error": result})
                 return
             self._json(200, {"ok": True, "result": result})
+
+        def _question_payload(self, payload):
+            """Stamp the Robbins day from the current-location zone, not the browser."""
+            body = dict(payload) if isinstance(payload, dict) else {}
+            try:
+                data = load_data(self.cfg)
+            except Exception:
+                data = {}
+            day, _zone = render.ritual_day(None, data, dt.datetime.now(dt.timezone.utc))
+            body["day"] = day
+            return body
 
         def _form(self, op):
             if not self._same_origin() or not self._basic():
@@ -353,6 +366,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                         "until": fields.get("until", ""),
                         "clear": fields.get("clear") == "1",
                     }
+                elif op == "question/toggle":
+                    payload = self._question_payload({"id": fields["id"], "done": fields.get("done") == "1"})
                 else:
                     self._send(404, "Not found", "text/plain; charset=utf-8")
                     return
@@ -365,7 +380,9 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             area_q = fields.get("area_q") or ""
             location = "/" + (f"?area={quote(area_q)}" if area_q in AREAS else "")
-            if fields.get("id"):
+            if op == "question/toggle":
+                location += "#principles"
+            elif fields.get("id"):
                 location += "#" + render.dom_id("i", fields["id"])
             self.send_response(303)
             self.send_header("Location", location)

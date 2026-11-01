@@ -966,6 +966,231 @@ class RedesignTests(unittest.TestCase):
         self.assertAlmostEqual(rates["usd_per"]["JPY"], 0.008870 / 1.3960, places=6)
         self.assertEqual(rates["source"], "Bank of Canada Valet")
 
+    def test_quadrant_order_and_reason_labels(self):
+        today = dt.date(2026, 11, 1)
+        self.assertEqual(
+            render.quadrant_reason({"important": True, "due": "2026-11-03", "section": "open"}, today),
+            "Important, due in 2 days",
+        )
+        self.assertEqual(
+            render.quadrant_reason({"due": "2026-10-31", "section": "open"}, today),
+            "Urgent, overdue 1 day",
+        )
+        self.assertEqual(
+            render.quadrant_reason({"section": "watch", "due": ""}, today),
+            "Not urgent, no due date",
+        )
+        self.assertEqual(
+            render.quadrant_reason({"quadrant_manual": True, "important": True, "due": "2026-11-03"}, today),
+            "Moved manually",
+        )
+        for text in (
+            "Important, due in 2 days",
+            "Urgent, overdue 1 day",
+            "Not urgent, no due date",
+            "Moved manually",
+        ):
+            self.assertNotIn("\u2014", text)
+            self.assertNotIn("\u2013", text)
+        data = {
+            "items": [
+                {"id": "N1", "title": "Do the urgent thing", "area": "Personal", "kind": "task", "section": "now", "important": True, "due": "2026-11-01", "done": False, "links": []},
+                {"id": "N2", "title": "Schedule the later thing", "area": "Personal", "kind": "task", "section": "open", "important": True, "due": "2026-12-01", "done": False, "links": []},
+                {"id": "N3", "title": "Delegate the overdue thing", "area": "Personal", "kind": "task", "section": "open", "due": "2026-10-31", "done": False, "links": []},
+                {"id": "N4", "title": "Drop the someday thing", "area": "Personal", "kind": "task", "section": "watch", "due": "", "done": False, "links": []},
+            ],
+            "calendar": [],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+        html, _counts, _jarvis = render.render_main(data, fresh_state(), today=today)
+        positions = [html.find(f'id="quadrant-{key}"') for key in ("do_now", "schedule", "delegate", "delete")]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn(-1, positions)
+        self.assertLess(html.find("Do the urgent thing"), html.find("Schedule the later thing"))
+        self.assertLess(html.find("Schedule the later thing"), html.find("Delegate the overdue thing"))
+        self.assertLess(html.find("Delegate the overdue thing"), html.find("Drop the someday thing"))
+        self.assertIn("Important, due today", html)
+        self.assertIn("Urgent, overdue 1 day", html)
+        self.assertIn("Not urgent, no due date", html)
+        state = fresh_state()
+        apply(state, "todo/quadrant", {"id": "N2", "quadrant": "delete"}, "2026-11-01T00:00:00Z")
+        moved, _counts, _jarvis = render.render_main(data, state, today=today)
+        delete_chunk = moved.split('id="quadrant-delete"', 1)[1].split('id="calendar"', 1)[0]
+        self.assertIn("Schedule the later thing", delete_chunk)
+        self.assertIn("Moved manually", delete_chunk)
+
+    def test_row_links_attachments_and_draft_ready(self):
+        base = {
+            "calendar": [],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+        }
+        files = [{"name": f"File{i}.pdf", "url": f"https://example.com/f{i}.pdf"} for i in range(1, 6)]
+        item = {
+            "id": "S-1", "title": "Reply with the draft", "area": "Echandia", "kind": "email",
+            "section": "now", "due": "2026-11-01", "done": False,
+            "note": "Asking for a sample date that stays on one line until tapped.",
+            "webLink": "https://outlook.office.com/mail/inbox/sample",
+            "links": [
+                {"kind": "draft", "url": "https://outlook.office.com/mail/drafts/sample"},
+                {"kind": "clickup", "href": "https://app.clickup.com/t/sampletask", "label": "ClickUp sample"},
+            ],
+            "attachments": files,
+        }
+        html, _counts, _jarvis = render.render_main(
+            {**base, "items": [item]}, fresh_state(), today=dt.date(2026, 11, 1),
+        )
+        self.assertLess(html.find("Draft ready"), html.find("Open email"))
+        self.assertLess(html.find("Open email"), html.find("ClickUp sample"))
+        self.assertIn('class="draftready"', html)
+        self.assertIn('details class="note"', html)
+        self.assertIn("Asking for a sample date", html)
+        head, tail = html.split("+2 more", 1)
+        self.assertIn("File1.pdf", head)
+        self.assertIn("File3.pdf", head)
+        self.assertNotIn("File5.pdf", head)
+        self.assertIn("File5.pdf", tail)
+        task = dict(item, id="S-2", kind="task", links=[], webLink="https://outlook.office.com/mail/inbox/task")
+        task_html, _counts, _jarvis = render.render_main({**base, "items": [task]}, fresh_state(), today=dt.date(2026, 11, 1))
+        self.assertIn("Open email", task_html)
+        self.assertNotIn("Draft ready", task_html)
+        one = dict(item, id="S-3", links=[], webLink="", attachments=files[:1])
+        one_html, _counts, _jarvis = render.render_main({**base, "items": [one]}, fresh_state(), today=dt.date(2026, 11, 1))
+        self.assertIn("File1.pdf", one_html)
+        self.assertNotIn("+", one_html.split("File1.pdf", 1)[1][:80])
+        none = dict(item, id="S-4", links=[], webLink="", attachments=[])
+        none_html, _counts, _jarvis = render.render_main({**base, "items": [none]}, fresh_state(), today=dt.date(2026, 11, 1))
+        self.assertNotIn("File1.pdf", none_html)
+        self.assertNotIn("Draft ready", none_html)
+        self.assertNotIn("Open email", none_html)
+        payload = {**base, "items": [item]}
+        validate_data(payload)
+        bare = {**base, "items": [{"id": "S-9", "title": "Old shape", "area": "Personal"}]}
+        validate_data(bare)
+        bad = {**base, "items": [dict(item, attachments=[{"name": "X", "url": "ftp://example.com/x"}])]}
+        with self.assertRaises(ValueError):
+            validate_data(bad)
+        long_name = {**base, "items": [dict(item, attachments=[{"name": "n" * 81, "url": "https://example.com/n"}])]}
+        with self.assertRaises(ValueError):
+            validate_data(long_name)
+        bad_draft = {**base, "items": [dict(item, links=[{"kind": "draft", "url": "mailto:a@example.com"}])]}
+        with self.assertRaises(ValueError):
+            validate_data(bad_draft)
+        self.assertNotIn("!", visible(html))
+
+
+class RobbinsTests(HttpCase):
+    MORNING = [
+        "What am I happy about today?",
+        "What am I excited about?",
+        "What am I proud of?",
+        "What am I grateful for?",
+        "What am I committed to today?",
+    ]
+    EVENING = [
+        "What did I give today?",
+        "What did I learn today?",
+        "How did today add to my life / the future?",
+    ]
+
+    def _board(self):
+        return {
+            "items": [],
+            "calendar": [],
+            "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []},
+            "principles": {"robbins": {"morning": self.MORNING, "evening": self.EVENING}},
+        }
+
+    def test_question_ids_ignore_list_index(self):
+        first = render.question_id("morning", self.MORNING[0])
+        self.assertEqual(first, render.question_id("morning", self.MORNING[0]))
+        self.assertNotEqual(first, render.question_id("evening", self.MORNING[0]))
+        html = render.principles_html(self._board(), 0, {})
+        flipped = render.principles_html(
+            {"principles": {"robbins": {"morning": list(reversed(self.MORNING)), "evening": self.EVENING}}},
+            0,
+            {},
+        )
+        self.assertIn(f'value="{first}"', html)
+        self.assertIn(f'value="{first}"', flipped)
+        self.assertLess(html.find(self.MORNING[0]), html.find(self.MORNING[1]))
+        self.assertLess(flipped.find(self.MORNING[-1]), flipped.find(self.MORNING[0]))
+
+    def test_toggle_persists_and_day_follows_current_location_zone(self):
+        moment = dt.datetime(2026, 11, 1, 6, 0, tzinfo=dt.timezone.utc)
+        bangkok_day, bangkok_zone = render.ritual_day({"HOME_TZ": "Asia/Bangkok"}, {}, moment)
+        vancouver_day, vancouver_zone = render.ritual_day({"HOME_TZ": "America/Vancouver"}, {}, moment)
+        missing_day, missing_zone = render.ritual_day({}, {}, moment)
+        self.assertEqual((bangkok_day, bangkok_zone), ("2026-11-01", "Asia/Bangkok"))
+        self.assertEqual((vancouver_day, vancouver_zone), ("2026-10-31", "America/Vancouver"))
+        self.assertEqual(missing_zone, "Asia/Bangkok")
+        self.assertNotEqual(missing_zone, "America/Vancouver")
+        osaka_day, osaka_zone = render.ritual_day(
+            {"HOME_TZ": "Asia/Bangkok"},
+            {"location": {"name": "Osaka", "tz": "Asia/Tokyo"}},
+            moment,
+        )
+        self.assertEqual(osaka_zone, "Asia/Tokyo")
+        self.assertEqual(osaka_day, "2026-11-01")
+        qid = render.question_id("morning", self.MORNING[0])
+        state = fresh_state()
+        apply(state, "question/toggle", {"id": qid, "done": True, "day": bangkok_day}, "2026-11-01T06:00:00Z")
+        shown, _counts, _jarvis = render.render_main(
+            self._board(), state, env={"HOME_TZ": "Asia/Bangkok"}, now=moment,
+        )
+        self.assertIn('aria-pressed="true"', shown.split(self.MORNING[0], 1)[0][-180:])
+        away, _counts, _jarvis = render.render_main(
+            self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=moment,
+        )
+        happy = away.split(self.MORNING[0], 1)[0][-180:]
+        self.assertIn('aria-pressed="false"', happy)
+        later = dt.datetime(2026, 11, 1, 8, 30, tzinfo=dt.timezone.utc)
+        vancouver_next, _zone = render.ritual_day({"HOME_TZ": "America/Vancouver"}, {}, later)
+        self.assertEqual(vancouver_next, "2026-11-01")
+        rolled, _counts, _jarvis = render.render_main(
+            self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=later,
+        )
+        self.assertIn('aria-pressed="true"', rolled.split(self.MORNING[0], 1)[0][-180:])
+        apply(state, "question/toggle", {"id": qid, "done": True, "day": "2026-10-31"}, "2026-11-01T06:00:00Z")
+        before_midnight = dt.datetime(2026, 11, 1, 7, 30, tzinfo=dt.timezone.utc)
+        on_old_day, _counts, _jarvis = render.render_main(
+            self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=before_midnight,
+        )
+        self.assertIn('aria-pressed="true"', on_old_day.split(self.MORNING[0], 1)[0][-180:])
+        after = dt.datetime(2026, 11, 2, 8, 30, tzinfo=dt.timezone.utc)
+        reset, _counts, _jarvis = render.render_main(
+            self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=after,
+        )
+        self.assertIn('aria-pressed="false"', reset.split(self.MORNING[0], 1)[0][-180:])
+
+    def test_question_toggle_requires_auth_and_persists(self):
+        question = "What did I learn today?"
+        qid = render.question_id("evening", question)
+        status, _headers, _body = self.request(
+            "/api/question/toggle",
+            method="POST",
+            data=json.dumps({"id": qid, "done": True}).encode(),
+            headers={"Content-Type": "application/json"},
+            auth=False,
+        )
+        self.assertEqual(status, 401)
+        status, _headers, body = self.request(
+            "/api/question/toggle",
+            method="POST",
+            data=json.dumps({"id": qid, "done": True, "day": "1999-01-01"}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200)
+        saved = json.loads(body)
+        self.assertTrue(saved["result"]["done"])
+        self.assertNotEqual(saved["result"]["day"], "1999-01-01")
+        status, _headers, page = self.request("/")
+        self.assertEqual(status, 200)
+        text = page.decode()
+        self.assertIn(question, text)
+        self.assertIn('aria-pressed="true"', text.split(question, 1)[0][-220:])
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["questions"][saved["result"]["day"]][qid]["done"])
+
 
 if __name__ == "__main__":
     unittest.main()

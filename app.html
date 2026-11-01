@@ -228,8 +228,39 @@ html.light .b.soon { background: #ffe7ad; color: #3d2c00; }
 .b.low { color: var(--m); }
 .b.now { background: var(--g); color: #04140c; }
 .b.next { background: var(--ech); color: #fff; }
-.refs, .nt, .src, .attr, .empty, footer { color: var(--m); }
+.refs, .nt, .src, .attr, .empty, footer, .why { color: var(--m); }
+.why {
+  font-size: 13px; font-weight: 550; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; min-width: 0; max-width: 100%;
+}
 .nt { margin-top: 4px; font-size: 15px; }
+.note { margin-top: 2px; }
+.note > summary {
+  display: block; cursor: pointer; min-height: 0; padding: 0; border: 0;
+  background: transparent; font-weight: 550; color: var(--m); font-size: 14px;
+}
+.note > summary::-webkit-details-marker { display: none; }
+.noteline { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note[open] .noteline { white-space: normal; }
+.rowlinks {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0;
+  margin-top: 2px; font-size: 14px; line-height: 1.35;
+}
+.rowlinks a { font-weight: 650; text-decoration: none; }
+.rowlinks a.draftready { color: var(--a); }
+.rowlinks .dot { color: var(--m); }
+.rowlinks details { display: inline; }
+.rowlinks summary {
+  display: inline; cursor: pointer; color: var(--c); font-weight: 650;
+  min-height: 0; padding: 0; border: 0; background: transparent;
+}
+.rowlinks summary::-webkit-details-marker { display: none; }
+.qs { list-style: none; margin: 0 0 8px; padding: 0; }
+.qs li { border-bottom: 1px solid var(--l); }
+.qform { display: flex; gap: 8px; align-items: center; min-height: 44px; margin: 0; }
+.qck { min-width: 72px; min-height: 36px; }
+.qtext { font-size: 15px; }
+.q.done .qtext { color: var(--m); text-decoration: line-through; }
 .lks, .rowtools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .lk {
   display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px;
@@ -468,7 +499,7 @@ footer { margin-top: 28px; font-size: 14px; }
       await refresh();
     } catch (err) {
       row.classList.remove("busy");
-      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant") {
+      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant" || op === "question/toggle") {
         form.submit();
         return;
       }

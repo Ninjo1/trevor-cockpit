@@ -106,7 +106,7 @@ def atomic_write_bytes(path, blob):
 
 
 def fresh_state():
-    return {"todos": {}, "custom": [], "emails": {}, "log": []}
+    return {"todos": {}, "custom": [], "emails": {}, "questions": {}, "log": []}
 
 
 def state_path(cfg):
@@ -138,6 +138,8 @@ def load_state(cfg):
         loaded["emails"] = {}
     if not isinstance(loaded.get("log"), list):
         loaded["log"] = []
+    if not isinstance(loaded.get("questions"), dict):
+        loaded["questions"] = {}
     return loaded
 
 
@@ -173,6 +175,7 @@ def save_state(cfg, state, now=None):
     state.setdefault("todos", {})
     state.setdefault("custom", [])
     state.setdefault("emails", {})
+    state.setdefault("questions", {})
     os.makedirs(cfg.data_dir, exist_ok=True)
     atomic_write_json(state_path(cfg), state)
     backup_dir = os.path.join(cfg.data_dir, "backups")

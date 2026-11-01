@@ -36,8 +36,8 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
-| `HOME_TZ` | Render dashboard | Fallback IANA zone for the Here clock when the device zone is unknown and the payload has no location for today. Example: `Asia/Bangkok` |
-| `HOME_LABEL` | Render dashboard, optional | City name for that fallback. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok) |
+| `HOME_TZ` | Render dashboard | Current location, the Here clock, not Vancouver. Vancouver is always the Home clock. These names stay as they are. Robbins questions reset at midnight in this zone, or in today's payload location zone when that place includes a time zone. If neither is set, that reset uses Asia/Bangkok. Example: `Asia/Bangkok` |
+| `HOME_LABEL` | Render dashboard, optional | City name for the current location. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok). This is not the Vancouver home label |
 | `DISPLAY_TZ` | Render dashboard | Zone for calendar times, which day an event falls on, due badges, and the refreshed line. If empty, `HOME_TZ` is used, then `America/Vancouver` |
 
 One of `BASIC_AUTH_PASS_SHA256` or `BASIC_AUTH_PASS` must be set or the app refuses to serve.
@@ -115,9 +115,11 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 | `due` | `YYYY-MM-DD` or `""` |
 | `priority` | `low` or null |
 | `done` | bool. A tick in `state.json` wins over this |
-| `note`, `done_note` | strings |
+| `note`, `done_note` | strings. The note is one line until tapped, then it expands. This is a tap, not a hover |
+| `webLink` | Outlook message URL. Any email-sourced item (kind `email` or `draft`, or a `webLink` / Outlook link on another kind) renders Open email |
 | `ledger_ids`, `refs` | lists of strings |
-| `links` | `[{label, href, kind}]`. `kind` may be `clickup`, `outlook`, `teams`, `calendar`, `mail`, or `web` |
+| `links` | `[{label, href, kind}]`. `kind` may be `clickup`, `outlook`, `teams`, `calendar`, `mail`, `web`, or `draft`. A draft link is `{kind: "draft", url, label optional}` and `url` must be http or https. When present, the row leads with Draft ready. When absent, that link is omitted |
+| `attachments` | Optional `[{name, url}]`. `url` must be http or https. `name` is at most 80 characters. Old payloads without this field still validate. Each file is a link on the same line as the other links. More than three files show the first three and `+N more` |
 
 Email and draft rows render under Emails waiting with Handled and Undo. Other rows are tasks: Done, Undo, Edit, and Snooze. The area chips filter tasks, mail, and money.
 
