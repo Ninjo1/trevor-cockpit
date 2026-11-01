@@ -289,6 +289,7 @@ def merged(data, state):
         else:
             note = item.get("note") or ""
         snooze = mail.get("snooze") if kind in ("email", "draft") else overlay.get("snooze")
+        pending, done_links = _voice_flags(state)
         out.append(
             {
                 "id": item["id"],
@@ -311,6 +312,8 @@ def merged(data, state):
                 "quadrant_manual": overlay.get("quadrant") in ("do_now", "schedule", "delegate", "delete"),
                 "webLink": item.get("webLink") or "",
                 "attachments": item.get("attachments") if isinstance(item.get("attachments"), list) else [],
+                "voice_pending": item["id"] in pending,
+                "voice_weblink": done_links.get(item["id"]) or "",
                 "important": item.get("important") if item.get("important") is not None else overlay.get("important"),
                 "owner": overlay.get("owner") or item.get("owner") or "",
             }
@@ -319,6 +322,7 @@ def merged(data, state):
         if not isinstance(custom, dict) or not custom.get("id"):
             continue
         overlay = todos.get(custom["id"]) or {}
+        pending, done_links = _voice_flags(state)
         out.append(
             {
                 "id": custom["id"],
@@ -341,6 +345,8 @@ def merged(data, state):
                 "quadrant_manual": overlay.get("quadrant") in ("do_now", "schedule", "delegate", "delete"),
                 "webLink": "",
                 "attachments": [],
+                "voice_pending": custom["id"] in pending,
+                "voice_weblink": done_links.get(custom["id"]) or "",
                 "important": custom.get("important"),
                 "owner": custom.get("owner") or "",
             }
@@ -425,17 +431,40 @@ def _open_email_href(item, links):
     return None
 
 
+def _voice_flags(state):
+    pending = set()
+    done_links = {}
+    for row in (state or {}).get("voice_drafts") or []:
+        if not isinstance(row, dict) or not row.get("item_id"):
+            continue
+        if row.get("status") == "pending":
+            pending.add(row["item_id"])
+        elif row.get("status") == "done":
+            href = _http_href(row.get("draft_weblink"))
+            if href:
+                done_links.setdefault(row["item_id"], href)
+    return pending, done_links
+
+
 def row_links_html(item):
     """One tight line: Draft ready, Open email, other links, then file names."""
     links = [link for link in (item.get("links") or []) if isinstance(link, dict)]
     parts = []
+    draft_linked = False
     for link in links:
         if link.get("kind") != "draft":
             continue
         href = _http_href(link.get("url") or link.get("href"))
         if href:
             parts.append(_anchor(href, "Draft ready", "draftready"))
+            draft_linked = True
             break
+    if not draft_linked and item.get("voice_pending"):
+        parts.append('<span class="draftwait">Draft requested</span>')
+    elif not draft_linked and item.get("voice_weblink"):
+        href = _http_href(item.get("voice_weblink"))
+        if href:
+            parts.append(_anchor(href, "Draft ready", "draftready"))
     email_href = _open_email_href(item, links)
     if email_href:
         parts.append(_anchor(email_href, "Open email"))
