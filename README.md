@@ -35,6 +35,7 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_PASS_SHA256` | Render dashboard, secret | Lowercase hex SHA-256 of the sign-in password. Preferred. When set, Basic auth checks this hash |
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
 | `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
+| `VOICE_PICKUP_TOKEN` | Render dashboard, secret | Bearer token for the voice draft pickup routes. Leave it unset until you choose a value. If it is unset those routes return 503 |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
 | `HOME_TZ` | Render dashboard | Current location, the Here clock, not Vancouver. Vancouver is always the Home clock. These names stay as they are. Robbins questions reset at midnight in this zone, or in today's payload location zone when that place includes a time zone. If neither is set, that reset uses Asia/Bangkok. Example: `Asia/Bangkok` |
 | `HOME_LABEL` | Render dashboard, optional | City name for the current location. If empty, the city is taken from the zone (`Asia/Bangkok` becomes Bangkok). This is not the Vancouver home label |
@@ -250,6 +251,12 @@ A minimal restaurants object, if the morning file does not have one yet:
 | POST | `/api/snooze` | Basic | `{id, kind: "todo" or "email", until: "YYYY-MM-DD"}`. `clear: true` removes a snooze |
 | POST | `/form/...` | Basic | Same actions as a normal form, then a redirect. Used when JavaScript is off |
 | GET | `/logout` | none | 401 so the browser drops the password prompt |
+| POST | `/api/voice/draft_request` | Basic | Queue an Outlook draft. Body `{item_id, text}`. The server copies `message_id`, `conversation_id`, and `subject` from that item |
+| GET | `/api/voice/draft_requests?status=pending` | Bearer `VOICE_PICKUP_TOKEN` | `{requests: [...]}`. 503 if the token is unset. `status` may be `pending` or `done` |
+| POST | `/api/voice/draft_requests/<id>/done` | Bearer `VOICE_PICKUP_TOKEN` | Body `{draft_weblink?}`. Marks that queued draft done |
+| POST | `/api/voice/ask` | Basic | Body `{text}`. Returns `{ok, answer}` from the board. No outside model |
+
+An email item may include optional `message_id`, `conversation_id`, and `subject`. The mic button queues a reply. It does not talk to Outlook. A pending queue row shows Draft requested on that email until a `kind: "draft"` link arrives, or until the pickup call stores `draft_weblink`. Spoken questions are answered on the server from the current board. The local intents are due today, Do now, the next trip, today's meetings, waiting on, and upgrade status. Anything else returns `I can't answer that from the board yet`. `voice.answer` is the function to replace if a model is added later.
 
 Browser posts must come from the same host. `curl` sends no `Origin` header and is allowed.
 

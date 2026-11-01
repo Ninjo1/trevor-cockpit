@@ -16,13 +16,14 @@ class StateError(Exception):
 
 
 class Config:
-    def __init__(self, data_dir, password, user="trevor", ingest_token="", sample_path=None, password_sha256=""):
+    def __init__(self, data_dir, password, user="trevor", ingest_token="", sample_path=None, password_sha256="", voice_pickup_token=""):
         self.data_dir = data_dir
         self.password = password if (password or "").strip() else ""
         self.password_sha256 = (password_sha256 or "").strip().lower()
         self.user = (user or "trevor").strip() or "trevor"
         self.ingest_token = ingest_token if (ingest_token or "").strip() else ""
         self.sample_path = sample_path
+        self.voice_pickup_token = voice_pickup_token if (voice_pickup_token or "").strip() else ""
 
     def configured(self):
         """True when Basic auth has a plaintext password or a password hash."""
@@ -38,6 +39,7 @@ class Config:
             ingest_token=os.environ.get("INGEST_TOKEN") or "",
             sample_path=os.environ.get("SAMPLE_DATA") or os.path.join(root, "sample", "data.json"),
             password_sha256=os.environ.get("BASIC_AUTH_PASS_SHA256") or "",
+            voice_pickup_token=os.environ.get("VOICE_PICKUP_TOKEN") or "",
         )
 
 
@@ -106,7 +108,7 @@ def atomic_write_bytes(path, blob):
 
 
 def fresh_state():
-    return {"todos": {}, "custom": [], "emails": {}, "questions": {}, "log": []}
+    return {"todos": {}, "custom": [], "emails": {}, "questions": {}, "voice_drafts": [], "log": []}
 
 
 def state_path(cfg):
@@ -140,6 +142,8 @@ def load_state(cfg):
         loaded["log"] = []
     if not isinstance(loaded.get("questions"), dict):
         loaded["questions"] = {}
+    if not isinstance(loaded.get("voice_drafts"), list):
+        loaded["voice_drafts"] = []
     return loaded
 
 
@@ -176,6 +180,7 @@ def save_state(cfg, state, now=None):
     state.setdefault("custom", [])
     state.setdefault("emails", {})
     state.setdefault("questions", {})
+    state.setdefault("voice_drafts", [])
     os.makedirs(cfg.data_dir, exist_ok=True)
     atomic_write_json(state_path(cfg), state)
     backup_dir = os.path.join(cfg.data_dir, "backups")

@@ -20,6 +20,7 @@ sys.path.insert(0, ROOT)
 
 import render
 import store
+import voice
 from actions import apply
 from auth import basic_ok, bearer_ok, const_eq, origin_allowed
 from server import Server, make_handler
@@ -1190,6 +1191,98 @@ class RobbinsTests(HttpCase):
         self.assertIn('aria-pressed="true"', text.split(question, 1)[0][-220:])
         state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
         self.assertTrue(state["questions"][saved["result"]["day"]][qid]["done"])
+
+
+class VoiceTests(HttpCase):
+    def _write_mail(self):
+        data = self.sample()
+        for item in data["items"]:
+            if item.get("id") == "S-mail-1":
+                item["message_id"] = "AAMk-sample"
+                item["conversation_id"] = "conv-sample"
+                item["subject"] = "Harbor note"
+        with open(os.path.join(self.tmp.name, "data.json"), "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+
+    def test_local_answers(self):
+        facts = {
+            "due_today": ["File the form"],
+            "do_now": ["Call the harbor"],
+            "next_trip": "DL 1001 to Osaka",
+            "next_trip_kind": "flight",
+            "meetings": ["Budget decision"],
+            "waiting": ["Ada Cole: Sign the drawing"],
+            "upgrades": ["DL 1001, Waitlisted, position 4"],
+        }
+        self.assertEqual(voice.answer("what's due today", facts), "File the form")
+        self.assertEqual(voice.answer("what is in Do now", facts), "Call the harbor")
+        self.assertEqual(voice.answer("next flight", facts), "Next flight is DL 1001 to Osaka.")
+        self.assertEqual(voice.answer("today's meetings", facts), "Budget decision")
+        self.assertEqual(voice.answer("who am I waiting on", facts), "Ada Cole: Sign the drawing")
+        self.assertEqual(voice.answer("upgrade status", facts), "DL 1001, Waitlisted, position 4")
+        self.assertEqual(voice.answer("tell me a joke", facts), "I can't answer that from the board yet.")
+        self.assertEqual(voice.answer("due today", {"due_today": []}), "Nothing is due today.")
+        self.assertEqual(voice.answer("anything", facts, backend=lambda question, found: "Later model"), "Later model")
+
+    def test_draft_queue_auth_bearer_and_done(self):
+        self._write_mail()
+        body = json.dumps({"item_id": "S-mail-1", "text": "Please send the file."}).encode()
+        status, _headers, _raw = self.request(
+            "/api/voice/draft_request", method="POST", data=body,
+            headers={"Content-Type": "application/json"}, auth=False,
+        )
+        self.assertEqual(status, 401)
+        status, _headers, raw = self.request(
+            "/api/voice/draft_request", method="POST", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, raw)
+        saved = json.loads(raw)["result"]
+        self.assertEqual(saved["status"], "pending")
+        self.assertEqual(saved["item_id"], "S-mail-1")
+        self.assertEqual(saved["message_id"], "AAMk-sample")
+        self.assertEqual(saved["conversation_id"], "conv-sample")
+        self.assertEqual(saved["subject"], "Harbor note")
+        self.assertEqual(saved["text"], "Please send the file.")
+        self.assertTrue(saved["id"].startswith("V-"))
+        status, _headers, page = self.request("/")
+        self.assertIn(b'class="draftwait">Draft requested', page)
+        status, _headers, raw = self.request("/api/voice/draft_requests?status=pending", auth=False)
+        self.assertEqual(status, 503)
+        self.assertIn(b"VOICE_PICKUP_TOKEN is unset", raw)
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self.request(
+            "/api/voice/draft_requests?status=pending",
+            auth="Bearer wrong-token",
+        )
+        self.assertEqual(status, 401)
+        status, _headers, raw = self.request(
+            "/api/voice/draft_requests?status=pending",
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(status, 200)
+        listed = json.loads(raw)["requests"]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["id"], saved["id"])
+        status, _headers, raw = self.request(
+            "/api/voice/draft_requests/" + saved["id"] + "/done",
+            method="POST",
+            data=json.dumps({"draft_weblink": "https://outlook.office.com/mail/drafts/ready"}).encode(),
+            headers={"Content-Type": "application/json"},
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["result"]["status"], "done")
+        status, _headers, raw = self.request(
+            "/api/voice/draft_requests?status=pending",
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(json.loads(raw)["requests"], [])
+        status, _headers, page = self.request("/")
+        row = page.decode().split('data-id="S-mail-1"', 1)[1].split("</li>", 1)[0]
+        self.assertNotIn("Draft requested", row)
+        self.assertIn("https://outlook.office.com/mail/drafts/ready", row)
+        self.assertIn("Draft ready", row)
 
 
 if __name__ == "__main__":

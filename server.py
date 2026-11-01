@@ -12,12 +12,14 @@ Ticks live in $DATA_DIR/state.json and are never written by ingest.
 import datetime as dt
 import json
 import os
+import re
 from urllib.parse import parse_qs, quote, urlsplit
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import fxrates
 import render
+import voice
 import weather as weather_mod
 from actions import AREAS, apply, brief_log
 from auth import basic_ok, bearer_ok, origin_allowed
@@ -312,11 +314,109 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             if op == "question/toggle":
                 payload = self._question_payload(payload)
+            if op == "voice/draft_request":
+                self._voice_queue(payload)
+                return
+            if op == "voice/ask":
+                self._voice_ask(payload)
+                return
             status, result = self._mutate(op, payload)
             if status != 200:
                 self._json(status, {"ok": False, "error": result})
                 return
             self._json(200, {"ok": True, "result": result})
+
+        def _voice_guard(self):
+            token = self.cfg.voice_pickup_token
+            if not token:
+                self._json(503, {"ok": False, "error": "VOICE_PICKUP_TOKEN is unset"})
+                return False
+            if not bearer_ok(self.headers.get("Authorization"), token):
+                self._unauthorized("Bearer")
+                return False
+            return True
+
+        def _voice_list(self):
+            if not self._voice_guard():
+                return
+            status = (parse_qs(urlsplit(self.path).query).get("status") or ["pending"])[0]
+            if status not in ("pending", "done"):
+                self._json(400, {"ok": False, "error": "status must be pending or done"})
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"requests": voice.list_drafts(state, status)})
+
+        def _voice_done(self, request_id):
+            if not self._voice_guard():
+                return
+            body, error = self._read(JSON_LIMIT)
+            if error:
+                self._json(413 if error == "too large" else 400, {"ok": False, "error": "body is not valid"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._json(400, {"ok": False, "error": "body is not JSON"})
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    record = voice.finish_draft(state, request_id, payload.get("draft_weblink"), now_iso())
+                    save_state(self.cfg, state)
+            except KeyError:
+                self._json(404, {"ok": False, "error": "request was not found"})
+                return
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"ok": True, "result": record})
+
+        def _voice_queue(self, payload):
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "body must be an object"})
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    data = load_data(self.cfg)
+                    record = voice.queue_draft(state, data, payload.get("item_id"), payload.get("text") or "", now_iso())
+                    save_state(self.cfg, state)
+            except KeyError:
+                self._json(404, {"ok": False, "error": "item was not found"})
+                return
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"ok": True, "result": record})
+
+        def _voice_ask(self, payload):
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "body must be an object"})
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    data = load_data(self.cfg)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            zone, _label = render.resolve_display()
+            moment = dt.datetime.now(dt.timezone.utc)
+            facts = voice.board_facts(data, state, moment.astimezone(zone).date(), moment, zone)
+            self._json(200, {"ok": True, "answer": voice.answer(payload.get("text") or "", facts)})
 
         def _question_payload(self, payload):
             """Stamp the Robbins day from the current-location zone, not the browser."""
@@ -421,6 +521,13 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             if not write and path == "/api/state":
                 self._state()
+                return
+            if not write and path == "/api/voice/draft_requests":
+                self._voice_list()
+                return
+            done_match = re.fullmatch(r"/api/voice/draft_requests/([^/]+)/done", path)
+            if write and done_match:
+                self._voice_done(done_match.group(1))
                 return
             if path.startswith("/api/") or path.startswith("/form/") or path in (
                 "/",

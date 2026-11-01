@@ -261,6 +261,22 @@ html.light .b.soon { background: #ffe7ad; color: #3d2c00; }
 .qck { min-width: 72px; min-height: 36px; }
 .qtext { font-size: 15px; }
 .q.done .qtext { color: var(--m); text-decoration: line-through; }
+.draftwait { color: var(--a); font-weight: 750; }
+#mic {
+  position: fixed; z-index: 30; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 56px; height: 56px; border-radius: 28px; border: 1px solid var(--c);
+  background: var(--p); color: var(--c); font-weight: 750; cursor: pointer;
+}
+#voice {
+  position: fixed; z-index: 30; right: 16px; left: 16px; bottom: calc(80px + env(safe-area-inset-bottom));
+  max-width: 420px; margin-left: auto;
+  background: var(--p); color: var(--t); border: 1px solid var(--l); border-radius: 12px;
+  padding: 12px; display: grid; gap: 8px;
+}
+#voice[hidden] { display: none; }
+#voice-modes, #voice-fallback { display: flex; flex-wrap: wrap; gap: 8px; }
+#voice button, #voice-text { min-height: 44px; }
+#voice-answer { margin: 0; color: var(--m); }
 .lks, .rowtools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .lk {
   display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px;
@@ -376,6 +392,23 @@ footer { margin-top: 28px; font-size: 14px; }
 </div>
 <noscript><p class="banner">Script is off. The buttons on this page still save.</p></noscript>
 <main id="app"><!--PRE_MAIN--></main>
+<button id="mic" type="button" aria-label="Voice">Mic</button>
+<div id="voice" hidden>
+  <p id="voice-status">Choose what to say.</p>
+  <div id="voice-modes">
+    <button type="button" data-mode="reply">Reply to email</button>
+    <button type="button" data-mode="task">Add a task</button>
+    <button type="button" data-mode="ask">Ask the board</button>
+  </div>
+  <label id="voice-pick-label" hidden>Email<select id="voice-pick"></select></label>
+  <button id="voice-speak" type="button" hidden>Speak</button>
+  <form id="voice-fallback" hidden>
+    <input id="voice-text" type="text" autocomplete="off" aria-label="Type instead">
+    <button type="submit">Send</button>
+  </form>
+  <p id="voice-answer"></p>
+  <button id="voice-close" type="button">Close</button>
+</div>
 <script>
 "use strict";
 (function () {
@@ -697,6 +730,160 @@ footer { margin-top: 28px; font-size: 14px; }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
     refresh().catch(() => {});
+  });
+
+  const mic = byId("mic");
+  const voiceBox = byId("voice");
+  const voiceStatus = byId("voice-status");
+  const voiceAnswer = byId("voice-answer");
+  const voiceFallback = byId("voice-fallback");
+  const voiceText = byId("voice-text");
+  const voicePickLabel = byId("voice-pick-label");
+  const voicePick = byId("voice-pick");
+  const voiceSpeak = byId("voice-speak");
+  let voiceMode = "";
+  let voiceItem = "";
+
+  function unlockSpeech() {
+    if (!window.speechSynthesis) return;
+    const utter = new SpeechSynthesisUtterance(" ");
+    utter.volume = 0;
+    window.speechSynthesis.speak(utter);
+  }
+
+  function speak(text) {
+    voiceAnswer.textContent = text;
+    if (!window.speechSynthesis) return;
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "en-US";
+    window.speechSynthesis.speak(utter);
+  }
+
+  function showFallback(message) {
+    voiceStatus.textContent = message || "Speech is off. Type instead. The keyboard mic still works.";
+    voiceFallback.hidden = false;
+    voiceText.focus();
+  }
+
+  function emailChoices() {
+    return [...document.querySelectorAll("li.it")].filter((row) => row.querySelector('form[action="form/email/handled"]')).map((row) => ({
+      id: row.dataset.id || "",
+      title: (row.querySelector(".ttl") && row.querySelector(".ttl").textContent) || "Email"
+    })).filter((row) => row.id);
+  }
+
+  function fillEmailPick() {
+    const choices = emailChoices();
+    voicePick.innerHTML = "";
+    choices.forEach((choice) => {
+      const option = document.createElement("option");
+      option.value = choice.id;
+      option.textContent = choice.title;
+      if (choice.id === voiceItem) option.selected = true;
+      voicePick.appendChild(option);
+    });
+    return choices;
+  }
+
+  function startListen(onText) {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Rec) {
+      showFallback();
+      return;
+    }
+    let rec;
+    try { rec = new Rec(); } catch (err) { showFallback(); return; }
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (ev) => {
+      const said = ev.results && ev.results[0] && ev.results[0][0] && ev.results[0][0].transcript;
+      if (said) onText(String(said));
+      else showFallback();
+    };
+    rec.onerror = () => showFallback();
+    try { rec.start(); } catch (err) { showFallback(); }
+  }
+
+  async function useText(text) {
+    const said = String(text || "").trim();
+    if (!said) return;
+    voiceStatus.textContent = "Working.";
+    try {
+      if (voiceMode === "ask") {
+        const res = await post("voice/ask", { text: said });
+        speak((res && res.answer) || "I can't answer that from the board yet.");
+        voiceStatus.textContent = "Answered.";
+      } else if (voiceMode === "task") {
+        await post("todo/add", { title: said.slice(0, 300), area: "Personal", due: "", notes: "" });
+        voiceStatus.textContent = "Added to the board.";
+        await refresh();
+      } else if (voiceMode === "reply") {
+        const itemId = voicePick.value || voiceItem;
+        if (!itemId) {
+          voiceStatus.textContent = "No email is selected.";
+          return;
+        }
+        await post("voice/draft_request", { item_id: itemId, text: said });
+        voiceStatus.textContent = "Draft requested.";
+        await refresh();
+      }
+    } catch (err) {
+      voiceStatus.textContent = "Not saved. Tap again.";
+    }
+  }
+
+  function begin(mode) {
+    unlockSpeech();
+    voiceMode = mode;
+    voiceAnswer.textContent = "";
+    voiceFallback.hidden = true;
+    voiceSpeak.hidden = true;
+    voicePickLabel.hidden = true;
+    if (mode === "reply") {
+      const choices = fillEmailPick();
+      if (!choices.length) {
+        voiceStatus.textContent = "No email is on the board.";
+        return;
+      }
+      if (voiceItem && choices.some((choice) => choice.id === voiceItem)) {
+        voiceStatus.textContent = "Listening for the reply.";
+        startListen(useText);
+        return;
+      }
+      voicePickLabel.hidden = false;
+      voiceSpeak.hidden = false;
+      voiceStatus.textContent = "Choose the email, then speak.";
+      return;
+    }
+    voiceStatus.textContent = mode === "ask" ? "Listening for a question." : "Listening for a task.";
+    startListen(useText);
+  }
+
+  mic.addEventListener("click", () => {
+    unlockSpeech();
+    voiceBox.hidden = false;
+    voiceStatus.textContent = voiceItem ? "Reply is ready for the email you opened." : "Choose what to say.";
+  });
+  byId("voice-close").addEventListener("click", () => { voiceBox.hidden = true; });
+  voiceBox.querySelectorAll("[data-mode]").forEach((button) => {
+    button.addEventListener("click", () => begin(button.dataset.mode));
+  });
+  voiceSpeak.addEventListener("click", () => {
+    unlockSpeech();
+    voiceItem = voicePick.value || voiceItem;
+    voiceStatus.textContent = "Listening for the reply.";
+    startListen(useText);
+  });
+  voiceFallback.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    unlockSpeech();
+    useText(voiceText.value);
+  });
+  app.addEventListener("click", (ev) => {
+    const row = ev.target.closest("li.it");
+    if (!row || !row.querySelector('form[action="form/email/handled"]')) return;
+    voiceItem = row.dataset.id || "";
   });
 })();
 </script>
