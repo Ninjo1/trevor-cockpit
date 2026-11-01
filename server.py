@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import decisions
 import fxrates
 import render
 import voice
@@ -320,6 +321,13 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             if op == "voice/ask":
                 self._voice_ask(payload)
                 return
+            if op == "decisions":
+                status, result = self._decision_apply(payload)
+                if status != 200:
+                    self._json(status, {"ok": False, "error": result})
+                    return
+                self._json(200, {"ok": True, "result": result})
+                return
             status, result = self._mutate(op, payload)
             if status != 200:
                 self._json(status, {"ok": False, "error": result})
@@ -418,6 +426,66 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             facts = voice.board_facts(data, state, moment.astimezone(zone).date(), moment, zone)
             self._json(200, {"ok": True, "answer": voice.answer(payload.get("text") or "", facts)})
 
+        def _decision_apply(self, payload):
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    data = load_data(self.cfg)
+                    record = decisions.queue_decision(state, data, payload, now_iso(), dt.datetime.now(dt.timezone.utc))
+                    save_state(self.cfg, state)
+            except KeyError:
+                return 404, "decision was not found"
+            except ValueError as ex:
+                return 400, str(ex)
+            except StateError as ex:
+                return 500, str(ex)
+            return 200, record
+
+        def _decision_list(self):
+            if not self._voice_guard():
+                return
+            status = (parse_qs(urlsplit(self.path).query).get("status") or ["queued"])[0]
+            if status not in ("queued", "done", "failed"):
+                self._json(400, {"ok": False, "error": "status must be queued, done, or failed"})
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"decisions": decisions.list_decisions(state, status)})
+
+        def _decision_result(self, decision_id):
+            if not self._voice_guard():
+                return
+            body, error = self._read(JSON_LIMIT)
+            if error:
+                self._json(413 if error == "too large" else 400, {"ok": False, "error": "body is not valid"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._json(400, {"ok": False, "error": "body is not JSON"})
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    record = decisions.record_result(state, decision_id, payload.get("status"), payload.get("note"), now_iso())
+                    save_state(self.cfg, state)
+            except KeyError:
+                self._json(404, {"ok": False, "error": "decision was not found"})
+                return
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"ok": True, "result": record})
+
         def _question_payload(self, payload):
             """Stamp the Robbins day from the current-location zone, not the browser."""
             body = dict(payload) if isinstance(payload, dict) else {}
@@ -468,13 +536,23 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     }
                 elif op == "question/toggle":
                     payload = self._question_payload({"id": fields["id"], "done": fields.get("done") == "1"})
+                elif op == "decision":
+                    payload = {
+                        "type": fields.get("type"),
+                        "target": fields.get("target"),
+                        "choice": fields.get("choice"),
+                        "undo": fields.get("undo") == "1",
+                    }
                 else:
                     self._send(404, "Not found", "text/plain; charset=utf-8")
                     return
             except KeyError:
                 self._send(400, "The form is missing a field.", "text/plain; charset=utf-8")
                 return
-            status, result = self._mutate(op, payload)
+            if op == "decision":
+                status, result = self._decision_apply(payload)
+            else:
+                status, result = self._mutate(op, payload)
             if status != 200:
                 self._send(status, f"Could not save. {result}", "text/plain; charset=utf-8")
                 return
@@ -482,6 +560,8 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             location = "/" + (f"?area={quote(area_q)}" if area_q in AREAS else "")
             if op == "question/toggle":
                 location += "#principles"
+            elif op == "decision":
+                location += "#decisions"
             elif fields.get("id"):
                 location += "#" + render.dom_id("i", fields["id"])
             self.send_response(303)
@@ -528,6 +608,13 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             done_match = re.fullmatch(r"/api/voice/draft_requests/([^/]+)/done", path)
             if write and done_match:
                 self._voice_done(done_match.group(1))
+                return
+            if not write and path == "/api/decisions":
+                self._decision_list()
+                return
+            result_match = re.fullmatch(r"/api/decisions/([^/]+)/result", path)
+            if write and result_match:
+                self._decision_result(result_match.group(1))
                 return
             if path.startswith("/api/") or path.startswith("/form/") or path in (
                 "/",
