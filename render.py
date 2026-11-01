@@ -1186,6 +1186,15 @@ def cad_price_hint(price, currency, rates):
     return f" · about {shown} CAD"
 
 
+def _restaurant_link(href, text, row, kind, place):
+    """Same map or delivery link, with ids the click handler can log. No note text."""
+    return (
+        f'<a class="lk" href="{e_raw(href)}" target="_blank" rel="noopener noreferrer"'
+        f' data-rkind="{e_raw(kind)}" data-rlabel="{e_raw(row.get("name") or "")}"'
+        f' data-rarea="{e_raw(row.get("area") or "")}" data-rplace="{e_raw(place or "")}">{text}</a>'
+    )
+
+
 def restaurants_html(data, today=None, rates=None):
     place = pick_restaurant_place(data, today or dt.date.today())
     if not place:
@@ -1202,11 +1211,7 @@ def restaurants_html(data, today=None, rates=None):
         if not isinstance(row, dict):
             return ""
         href = safe_href(row.get("map_url"))
-        link = (
-            f'<a class="lk" href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">Map</a>'
-            if href
-            else ""
-        )
+        link = _restaurant_link(href, "Map", row, "eat", city) if href else ""
         price = row.get("price")
         hint = cad_price_hint(price, currency, rates)
         price_html = f'<span class="b">{e(str(price or "") + hint)}</span>' if price not in (None, "") else ""
@@ -1223,11 +1228,7 @@ def restaurants_html(data, today=None, rates=None):
         if not isinstance(row, dict):
             return ""
         href = safe_href(row.get("url"))
-        link = (
-            f'<a class="lk" href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">Open {e(row.get("app") or "app")}</a>'
-            if href
-            else ""
-        )
+        link = _restaurant_link(href, "Open " + e(row.get("app") or "app"), row, "delivery", city) if href else ""
         return (
             f'<article class="card"><h3 class="place">{e(row.get("name") or "Untitled")}</h3>'
             f'<div class="meta"><span class="b">{e(row.get("app") or "")}</span></div>'

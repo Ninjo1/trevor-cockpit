@@ -457,10 +457,11 @@ footer { margin-top: 28px; font-size: 14px; }
     });
   }
 
-  async function applyArea(next, fallbackHref) {
+  async function applyArea(next, fallbackHref, chosen) {
     area = next;
     paintChips();
     try { localStorage.setItem("cockpit-area", next); } catch (err) {}
+    if (chosen) post("events", { type: "filter", area: next }).catch(function () {});
     try {
       await refresh();
       history.replaceState(null, "", next === "All" ? "./" : "./?area=" + encodeURIComponent(next));
@@ -494,7 +495,22 @@ footer { margin-top: 28px; font-size: 14px; }
     const chip = ev.target.closest("a.chip");
     if (!chip) return;
     ev.preventDefault();
-    applyArea(chip.dataset.area, chip.getAttribute("href") || chip.href);
+    applyArea(chip.dataset.area, chip.getAttribute("href") || chip.href, true);
+  });
+
+  app.addEventListener("click", (ev) => {
+    const link = ev.target.closest("a[data-rkind]");
+    if (!link || !app.contains(link)) return;
+    const body = {
+      type: "restaurant",
+      label: link.getAttribute("data-rlabel") || "",
+      kind: link.getAttribute("data-rkind") || ""
+    };
+    const placeArea = link.getAttribute("data-rarea") || "";
+    const place = link.getAttribute("data-rplace") || "";
+    if (placeArea) body.area = placeArea;
+    if (place) body.place = place;
+    post("events", body).catch(function () {});
   });
 
   app.addEventListener("submit", async (ev) => {

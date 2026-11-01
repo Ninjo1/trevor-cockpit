@@ -6,6 +6,8 @@ import re
 import tempfile
 from zoneinfo import ZoneInfo
 
+import events as eventlog
+
 PT = ZoneInfo("America/Vancouver")
 BACKUP_DAYS = 14
 _DAY = re.compile(r"state-(\d{4}-\d{2}-\d{2})\.json")
@@ -108,7 +110,16 @@ def atomic_write_bytes(path, blob):
 
 
 def fresh_state():
-    return {"todos": {}, "custom": [], "emails": {}, "questions": {}, "voice_drafts": [], "decisions": [], "log": []}
+    return {
+        "todos": {},
+        "custom": [],
+        "emails": {},
+        "questions": {},
+        "voice_drafts": [],
+        "decisions": [],
+        "events": [],
+        "log": [],
+    }
 
 
 def state_path(cfg):
@@ -146,6 +157,8 @@ def load_state(cfg):
         loaded["voice_drafts"] = []
     if not isinstance(loaded.get("decisions"), list):
         loaded["decisions"] = []
+    if not isinstance(loaded.get("events"), list):
+        loaded["events"] = []
     return loaded
 
 
@@ -184,6 +197,8 @@ def save_state(cfg, state, now=None):
     state.setdefault("questions", {})
     state.setdefault("voice_drafts", [])
     state.setdefault("decisions", [])
+    state.setdefault("events", [])
+    eventlog.prune(state, now.astimezone(dt.timezone.utc))
     os.makedirs(cfg.data_dir, exist_ok=True)
     atomic_write_json(state_path(cfg), state)
     backup_dir = os.path.join(cfg.data_dir, "backups")
