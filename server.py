@@ -13,7 +13,7 @@ import datetime as dt
 import json
 import os
 import re
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,6 +22,7 @@ import events
 import fxrates
 import render
 import voice
+import watches
 import weather as weather_mod
 from actions import AREAS, FILTER_AREAS, apply, brief_log
 from auth import basic_ok, bearer_ok, origin_allowed
@@ -267,6 +268,10 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
             try:
                 with self.state_lock:
                     save_data(self.cfg, obj)
+                    if isinstance(obj.get("watches"), list):
+                        state = load_state(self.cfg)
+                        watches.apply_payload(state, obj["watches"])
+                        save_state(self.cfg, state)
             except OSError:
                 self._json(500, {"ok": False, "error": "could not store data"})
                 return
@@ -540,6 +545,33 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             self._json(200, {"events": page, "next_since": next_since})
 
+        def _watch_update(self, watch_id):
+            if not self._voice_guard():
+                return
+            body, error = self._read(JSON_LIMIT)
+            if error:
+                self._json(413 if error == "too large" else 400, {"ok": False, "error": "body is not valid"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._json(400, {"ok": False, "error": "body is not JSON"})
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    record = watches.update(state, watch_id, payload)
+                    save_state(self.cfg, state)
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"ok": True, "watch": record})
+
         def _question_payload(self, payload):
             """Stamp the Robbins day from the current-location zone, not the browser."""
             body = dict(payload) if isinstance(payload, dict) else {}
@@ -691,6 +723,10 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             if not write and path == "/api/events":
                 self._event_list()
+                return
+            watch_match = re.fullmatch(r"/api/watches/([^/]+)", path)
+            if write and watch_match:
+                self._watch_update(unquote(watch_match.group(1)))
                 return
             result_match = re.fullmatch(r"/api/decisions/([^/]+)/result", path)
             if write and result_match:

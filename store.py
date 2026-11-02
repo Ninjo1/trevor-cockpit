@@ -118,6 +118,7 @@ def fresh_state():
         "voice_drafts": [],
         "decisions": [],
         "events": [],
+        "watches": {},
         "log": [],
     }
 
@@ -159,6 +160,8 @@ def load_state(cfg):
         loaded["decisions"] = []
     if not isinstance(loaded.get("events"), list):
         loaded["events"] = []
+    if not isinstance(loaded.get("watches"), dict):
+        loaded["watches"] = {}
     return loaded
 
 
@@ -198,6 +201,8 @@ def save_state(cfg, state, now=None):
     state.setdefault("voice_drafts", [])
     state.setdefault("decisions", [])
     state.setdefault("events", [])
+    if not isinstance(state.get("watches"), dict):
+        state["watches"] = {}
     eventlog.prune(state, now.astimezone(dt.timezone.utc))
     os.makedirs(cfg.data_dir, exist_ok=True)
     atomic_write_json(state_path(cfg), state)

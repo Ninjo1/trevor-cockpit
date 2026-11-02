@@ -15,6 +15,7 @@ import re
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import watches as watchmod
 from actions import AREAS, FILTER_AREAS, area_of
 from textclean import clean_text
 
@@ -1117,6 +1118,47 @@ def today_meetings_card(data, zone, zone_label, now):
     return body
 
 
+def watches_html(state, zone, zone_label, now):
+    """One compact card per watch, just above Next up. Times use PT and the display zone."""
+    rows = watchmod.visible(state)
+    if not rows:
+        return ""
+    pt = ZoneInfo("America/Los_Angeles")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    cards = []
+    for row in rows:
+        try:
+            instant = watchmod.parse_instant(row.get("target_iso"), row.get("target_tz") or "America/Los_Angeles")
+        except ValueError:
+            continue
+        deadline = instant.strftime("%Y-%m-%dT%H:%M:%SZ")
+        left = watchmod.remaining_phrase((instant - now).total_seconds(), with_seconds=True)
+        pt_when = instant.astimezone(pt)
+        local_when = instant.astimezone(zone)
+        pt_line = f"PT {day_label(pt_when.date())}, {clock_time(pt_when)}"
+        local_line = f"{zone_label} {day_label(local_when.date())}, {clock_time(local_when)}"
+        title = e(row.get("title") or row.get("id") or "Watch")
+        href = safe_href(row.get("url"))
+        if href:
+            title = f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+        status = e(row.get("status") or "")
+        note = e(row.get("note") or "")
+        cards.append(
+            f'<article class="card watch" data-id="{e_raw(row.get("id") or "")}">'
+            f"<h2>{title}</h2>"
+            f'<p class="left" data-deadline="{e_raw(deadline)}">{e(left)}</p>'
+            f'<p class="when">{e(pt_line)}</p>'
+            f'<p class="when">{e(local_line)}</p>'
+            + (f'<p class="status">{status}</p>' if status else "")
+            + (f'<p class="note">{note}</p>' if note else "")
+            + "</article>"
+        )
+    if not cards:
+        return ""
+    return f'<section class="watches" aria-label="Domain watches">{"".join(cards)}</section>'
+
+
 def glance_html(data, zone, zone_label, weather=None, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if now.tzinfo is None:
@@ -1816,7 +1858,7 @@ def waiting_html(data, state, today, area):
 
 def render_main(data, state, area="All", today=None, zone=None, zone_label=None, weather=None, now=None, rates=None, env=None):
     if zone is None:
-        zone, zone_label = resolve_display()
+        zone, zone_label = resolve_display(env)
     elif not zone_label:
         zone_label = zone_city(getattr(zone, "key", FALLBACK_ZONE))
     today = today or dt.datetime.now(zone).date()
@@ -1853,6 +1895,7 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
     html_out += f'<h2>Today and the next 7 days <small>{e(zone_label)}</small></h2>'
     html_out += calendar_html(data, today, zone, zone_label) + "</section>"
     html_out += restaurants_html(data, today, rates)
+    html_out += watches_html(state, zone, zone_label, clock)
     html_out += glance_html(data, zone, zone_label, weather=weather, now=clock)
     html_out += f'<section id="emails"><h2>Emails waiting <small>{len(mail_live)}</small></h2>'
     html_out += list_html(mail_live, today, area, group)

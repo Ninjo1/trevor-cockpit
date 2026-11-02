@@ -77,6 +77,8 @@ def validate_data(obj):
         _travel(obj["travel"])
     if "upgrades" in obj and obj["upgrades"] is not None:
         _upgrades(obj["upgrades"])
+    if "watches" in obj and obj["watches"] is not None:
+        _watches(obj["watches"])
     return obj
 
 
@@ -314,3 +316,9 @@ def _upgrades(rows):
             isinstance(row["position"], str) or _number(row["position"])
         ):
             raise ValueError(f"upgrades[{index}].position must be a string or number")
+
+
+def _watches(rows):
+    import watches
+
+    watches.apply_payload({"watches": {}}, rows)
