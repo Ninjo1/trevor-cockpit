@@ -260,6 +260,7 @@ A minimal restaurants object, if the morning file does not have one yet:
 | POST | `/api/decisions/<id>/result` | Bearer `VOICE_PICKUP_TOKEN` | Body `{status: "done" or "failed", note?}`. Stores the note on `result_note` |
 | GET | `/api/events?since=<ISO>&limit=<n>` | Bearer `VOICE_PICKUP_TOKEN` | `{events: [...], next_since}`. 503 if the token is unset. `since` is exclusive. It is an ISO UTC time, or a bare `YYYY-MM-DD` which means midnight UTC that day. `limit` defaults to 1000 and must be 1 to 5000. Oldest first |
 | POST | `/api/events` | Basic | Body `{type: "filter", area}` or `{type: "restaurant", label, kind, area?, place?}`. Records an area chip or a restaurant link. Other event types are written by the action itself |
+| POST | `/api/watches/<id>` | Bearer `VOICE_PICKUP_TOKEN` | Body `{title?, target_iso?, target_tz?, status?, note?, url?}`. Updates that watch. 503 if the token is unset. A `target_iso` with no offset is local time in `target_tz` |
 
 The Decisions strip is omitted when there is nothing to approve, accept, or check in, and no queued result. A flight check-in is offered only in the 24 hours before departure, with a link to `https://www.delta.com/mytrips/` and the confirmation number when the trip has one. Taps only queue a record. Nothing is sent.
 
@@ -276,7 +277,17 @@ Board actions also append a learning event in `state.events`. Rows older than 18
 | `robbins` | Robbins question tick | `{done, day, section?, label?}`. `item_id` is the question id |
 | `restaurant` | Map or delivery link | `{label, kind: "eat" or "delivery", place?}`. `area` is the neighborhood when the place has one |
 
-`GET /api/events` returns those objects in `events`, oldest first. `next_since` is the `ts` of the last row in that page. Pass it as `since` on the next poll. Events at that exact time are not returned again. An empty page echoes `since`, or the server time when `since` was omitted.
+`GET /api/events` returns those objects in `events`, oldest first. `next_since` is the `ts` of the last row in that page. Pass it as `since` on the next poll. Events at that exact time are not returned again. An empty page echoes `since`, or the server time when `since` was omitted. `since` may be a full ISO UTC time or a bare `YYYY-MM-DD`, which means midnight UTC on that date.
+
+A domain watch sits above Next up. With nothing saved, the tile is fifi4.com, counting down to `2026-11-05T00:00:00` in `America/Los_Angeles`, and it also shows that instant in the display zone (`DISPLAY_TZ`, then `HOME_TZ`). After the instant, the countdown reads `Target reached, checking status`.
+
+Change it without a deploy. Either include this on an ingest, which updates only the ids you send and leaves every other saved watch in place:
+
+```json
+"watches": [{"id": "fifi4.com", "title": "fifi4.com", "target_iso": "2026-11-05T00:00:00", "target_tz": "America/Los_Angeles", "status": "Expired at Dynadot Oct 6. Watching every 2 h for auction or renewal.", "note": "Nov 5 is an estimate based on Dynadot's 30-day grace period.", "url": "https://fifi4.com"}]
+```
+
+`target_iso` with no offset is local time in `target_tz`. Or `POST /api/watches/fifi4.com` with the bearer token and any of `{title, target_iso, target_tz, status, note, url}`. An ingest that omits `watches` does not remove the saved row. If neither the payload nor a POST has set one, the tile uses the default above.
 
 An email item may include optional `message_id`, `conversation_id`, and `subject`. The mic button queues a reply. It does not talk to Outlook. A pending queue row shows Draft requested on that email until a `kind: "draft"` link arrives, or until the pickup call stores `draft_weblink`. Spoken questions are answered on the server from the current board. The local intents are due today, Do now, the next trip, today's meetings, waiting on, and upgrade status. Anything else returns `I can't answer that from the board yet`. `voice.answer` is the function to replace if a model is added later.
 

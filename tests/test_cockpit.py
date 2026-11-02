@@ -776,7 +776,8 @@ class GlanceTests(unittest.TestCase):
         self.assertIn("Check-in Thu Oct 29", html)
         self.assertIn("Check-out Wed Nov 4", html)
         self.assertIn("Fri Oct 30", html)
-        self.assertNotIn("12:00 AM", html)
+        next_up = html.split('id="next-up"', 1)[1].split("</article>", 1)[0]
+        self.assertNotIn("12:00 AM", next_up)
         before, after = html.split("Show all", 1)
         self.assertIn("Pier stay", before)
         self.assertIn("Later hop 2", before)
@@ -1765,6 +1766,102 @@ class AreaFilterTests(HttpCase):
         )
         self.assertEqual(status, 200, raw)
         self.assertEqual(json.loads(raw)["result"]["area"], "554 LLC")
+
+
+class WatchTests(HttpCase):
+    def _page(self, now, state=None, env=None):
+        data = {"items": [], "calendar": [], "restaurants": {"city": "", "as_of": "", "eat": [], "delivery": []}}
+        return render.render_main(
+            data,
+            state or fresh_state(),
+            now=now,
+            env=env or {"DISPLAY_TZ": "Asia/Bangkok", "HOME_TZ": "Asia/Bangkok"},
+        )[0]
+
+    def test_default_countdown_zones_and_expiry(self):
+        now = dt.datetime(2026, 11, 2, 12, tzinfo=dt.timezone.utc)
+        html = self._page(now)
+        self.assertIn("fifi4.com", html)
+        self.assertIn("https://fifi4.com", html)
+        self.assertIn("PT Thu Nov 5, 12:00 AM", html)
+        self.assertIn("Bangkok Thu Nov 5, 3:00 PM", html)
+        self.assertIn("2d 20h", html)
+        self.assertIn("Expired at Dynadot Oct 6. Watching every 2 h for auction or renewal.", html)
+        self.assertIn("30-day grace period.", html)
+        self.assertLess(html.find('class="watches"'), html.find('id="next-up"') if 'id="next-up"' in html else len(html))
+        later = self._page(dt.datetime(2026, 11, 6, tzinfo=dt.timezone.utc))
+        left = later.split('class="left"', 1)[1].split("</p>", 1)[0]
+        self.assertIn("Target reached, checking status", left)
+
+    def test_ingest_omission_keeps_the_saved_target(self):
+        status, _headers, raw = self.request(
+            "/api/watches/fifi4.com",
+            method="POST",
+            data=json.dumps({"target_iso": "2026-11-08T00:00:00"}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 503, raw)
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self.request(
+            "/api/watches/fifi4.com",
+            method="POST",
+            data=json.dumps({"target_iso": "2026-11-08T00:00:00"}).encode(),
+            headers={"Content-Type": "application/json"},
+            auth="Bearer no",
+        )
+        self.assertEqual(status, 401, raw)
+        status, _headers, raw = self.request(
+            "/api/watches/fifi4.com",
+            method="POST",
+            data=json.dumps({"target_iso": "2026-11-08T00:00:00"}).encode(),
+            headers={"Content-Type": "application/json"},
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(status, 200, raw)
+        watch = json.loads(raw)["watch"]
+        self.assertEqual(watch["id"], "fifi4.com")
+        self.assertEqual(watch["target_iso"], "2026-11-08T00:00:00")
+        self.assertEqual(watch["target_tz"], "America/Los_Angeles")
+        self.assertIn("Expired at Dynadot", watch["status"])
+        status, _headers, page = self.request("/")
+        self.assertIn("PT Sun Nov 8, 12:00 AM", page.decode())
+        status, _headers, body = self.request(
+            "/api/ingest",
+            method="POST",
+            data=json.dumps(self.sample()).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+        status, _headers, page = self.request("/")
+        self.assertIn("PT Sun Nov 8, 12:00 AM", page.decode())
+        self.assertNotIn("PT Thu Nov 5, 12:00 AM", page.decode())
+        pushed = self.sample()
+        pushed["watches"] = [{"id": "fifi4.com", "target_iso": "2026-11-09T00:00:00"}]
+        status, _headers, body = self.request(
+            "/api/ingest",
+            method="POST",
+            data=json.dumps(pushed).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+        status, _headers, page = self.request("/")
+        text = page.decode()
+        self.assertIn("PT Mon Nov 9, 12:00 AM", text)
+        self.assertNotIn("PT Sun Nov 8, 12:00 AM", text)
+        bad = self.sample()
+        bad["watches"] = [{"id": "fifi4.com", "target_tz": "Not/AZone"}]
+        status, _headers, body = self.request(
+            "/api/ingest",
+            method="POST",
+            data=json.dumps(bad).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400, body)
+        status, _headers, page = self.request("/")
+        self.assertIn("Nov 9", page.decode())
 
 
 if __name__ == "__main__":

@@ -315,6 +315,12 @@ input, select, textarea {
   border: 1.5px solid var(--l); background: var(--bg); color: var(--t);
 }
 textarea { min-height: 72px; }
+.watches { margin: 4px 0 14px; }
+.watch h2 { margin: 0 0 4px; text-transform: none; letter-spacing: 0; font-size: 18px; color: var(--t); }
+.watch h2 a { color: inherit; }
+.watch .left { margin: 4px 0; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.watch .when, .watch .note { margin: 2px 0; color: var(--m); font-size: 14px; }
+.watch .status { margin: 8px 0 0; }
 .glance { display: grid; gap: 10px; margin: 4px 0 14px; }
 .glance-card h2 { margin-top: 0; }
 .wxnow { font-size: 20px; font-weight: 750; margin: 4px 0; }
@@ -784,6 +790,31 @@ footer { margin-top: 28px; font-size: 14px; }
   if ((params.get("area") || "All") !== area) {
     applyArea(area, area === "All" ? "./" : "./?area=" + encodeURIComponent(area));
   }
+  function paintWatches() {
+    const narrow = window.matchMedia("(max-width: 520px)").matches;
+    document.querySelectorAll(".watch .left[data-deadline]").forEach((node) => {
+      const end = Date.parse(node.getAttribute("data-deadline"));
+      if (!Number.isFinite(end)) return;
+      const left = end - Date.now();
+      if (left <= 0) {
+        node.textContent = "Target reached, checking status";
+        return;
+      }
+      const whole = Math.floor(left / 1000);
+      const days = Math.floor(whole / 86400);
+      const hours = Math.floor((whole % 86400) / 3600);
+      const mins = Math.floor((whole % 3600) / 60);
+      const secs = whole % 60;
+      const parts = [];
+      if (days) parts.push(days + "d");
+      parts.push(hours + "h");
+      parts.push(mins + "m");
+      if (!narrow) parts.push(secs + "s");
+      node.textContent = parts.join(" ");
+    });
+  }
+  paintWatches();
+  setInterval(paintWatches, 1000);
   setInterval(() => { refresh().catch(() => setSave("warn", "Offline. Showing the last page.")); }, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
