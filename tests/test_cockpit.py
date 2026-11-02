@@ -1609,6 +1609,37 @@ class EventTests(HttpCase):
         stored = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
         self.assertEqual([row["id"] for row in stored["events"]], ["E-keptkeptkept"])
 
+    def test_toggle_is_readable_and_bare_date_since_is_accepted(self):
+        self.cfg.voice_pickup_token = "pickup-secret"
+        status, _headers, raw = self._post("/api/todo/toggle", {"id": "S-now-1", "done": True})
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self.request("/api/events?since=2026-01-01", auth="Bearer pickup-secret")
+        self.assertEqual(status, 200, raw)
+        body = json.loads(raw)
+        self.assertEqual(len(body["events"]), 1)
+        event = body["events"][0]
+        self.assertEqual(event["type"], "task_tick")
+        self.assertEqual(event["item_id"], "S-now-1")
+        self.assertTrue(event["data"]["done"])
+        self.assertNotIn("note", event["data"])
+        status, _headers, raw = self.request(
+            "/api/events?since=2026-01-01T00:00:00Z",
+            auth="Bearer pickup-secret",
+        )
+        self.assertEqual(len(json.loads(raw)["events"]), 1)
+        status, _headers, raw = self.request("/api/events?since=not-a-date", auth="Bearer pickup-secret")
+        self.assertEqual(status, 400, raw)
+        status, _headers, raw = self.request(
+            "/form/events",
+            method="POST",
+            data=b"type=filter&area=Aurora",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(status, 200, raw)
+        status, _headers, raw = self.request("/api/events?since=2026-01-01", auth="Bearer pickup-secret")
+        kinds = [row["type"] for row in json.loads(raw)["events"]]
+        self.assertEqual(kinds, ["task_tick", "filter"])
+
     def test_retention_boundary_and_same_second_page(self):
         now = dt.datetime(2026, 11, 1, 12, tzinfo=dt.timezone.utc)
         state = {"events": [

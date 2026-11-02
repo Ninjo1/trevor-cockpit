@@ -462,7 +462,7 @@ footer { margin-top: 28px; font-size: 14px; }
     area = next;
     paintChips();
     try { localStorage.setItem("cockpit-area", next); } catch (err) {}
-    if (chosen) post("events", { type: "filter", area: next }).catch(function () {});
+    if (chosen) recordEvent({ type: "filter", area: next });
     try {
       await refresh();
       history.replaceState(null, "", next === "All" ? "./" : "./?area=" + encodeURIComponent(next));
@@ -473,6 +473,30 @@ footer { margin-top: 28px; font-size: 14px; }
       }
       setSave("warn", "The list was not refreshed.");
     }
+  }
+
+  function recordEvent(body) {
+    post("events", body).catch(function () {
+      const frame = document.getElementById("event-frame");
+      const target = frame || document.createElement("iframe");
+      target.name = "event-frame";
+      target.id = "event-frame";
+      target.hidden = true;
+      if (!frame) document.body.appendChild(target);
+      const form = document.createElement("form");
+      form.method = "post";
+      form.action = "form/events";
+      form.target = "event-frame";
+      Object.keys(body).forEach(function (key) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = key;
+        input.value = body[key] == null ? "" : String(body[key]);
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    });
   }
 
   async function post(op, body) {
@@ -511,7 +535,7 @@ footer { margin-top: 28px; font-size: 14px; }
     const place = link.getAttribute("data-rplace") || "";
     if (placeArea) body.area = placeArea;
     if (place) body.place = place;
-    post("events", body).catch(function () {});
+    recordEvent(body);
   });
 
   app.addEventListener("submit", async (ev) => {
@@ -566,7 +590,7 @@ footer { margin-top: 28px; font-size: 14px; }
       await refresh();
     } catch (err) {
       row.classList.remove("busy");
-      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant" || op === "question/toggle" || op === "decision") {
+      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant" || op === "question/toggle" || op === "decision" || op === "snooze") {
         form.submit();
         return;
       }

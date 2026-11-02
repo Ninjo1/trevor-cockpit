@@ -258,7 +258,7 @@ A minimal restaurants object, if the morning file does not have one yet:
 | POST | `/api/decisions` | Basic | Body `{type, target, choice}`. `type` is `draft`, `meeting`, or `checkin`. Choices are `approve` or `skip`, `accept` or `decline`, and `checkin`. The same target while queued updates that row instead of adding another. `{type, target, undo: true}` removes a queued row |
 | GET | `/api/decisions?status=queued` | Bearer `VOICE_PICKUP_TOKEN` | `{decisions: [...]}`. 503 if the token is unset. `status` may be `queued`, `done`, or `failed` |
 | POST | `/api/decisions/<id>/result` | Bearer `VOICE_PICKUP_TOKEN` | Body `{status: "done" or "failed", note?}`. Stores the note on `result_note` |
-| GET | `/api/events?since=<ISO>&limit=<n>` | Bearer `VOICE_PICKUP_TOKEN` | `{events: [...], next_since}`. 503 if the token is unset. `since` is exclusive. `limit` defaults to 1000 and must be 1 to 5000. Oldest first |
+| GET | `/api/events?since=<ISO>&limit=<n>` | Bearer `VOICE_PICKUP_TOKEN` | `{events: [...], next_since}`. 503 if the token is unset. `since` is exclusive. It is an ISO UTC time, or a bare `YYYY-MM-DD` which means midnight UTC that day. `limit` defaults to 1000 and must be 1 to 5000. Oldest first |
 | POST | `/api/events` | Basic | Body `{type: "filter", area}` or `{type: "restaurant", label, kind, area?, place?}`. Records an area chip or a restaurant link. Other event types are written by the action itself |
 
 The Decisions strip is omitted when there is nothing to approve, accept, or check in, and no queued result. A flight check-in is offered only in the 24 hours before departure, with a link to `https://www.delta.com/mytrips/` and the confirmation number when the trip has one. Taps only queue a record. Nothing is sent.

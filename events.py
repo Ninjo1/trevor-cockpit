@@ -27,21 +27,28 @@ def stamp(moment):
 
 
 def parse_time(value):
+    """ISO UTC, or a bare YYYY-MM-DD which means midnight UTC that day."""
     if not isinstance(value, str):
-        raise ValueError("since must be an ISO UTC time")
+        raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date")
     text = value.strip()
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        try:
+            day = dt.date.fromisoformat(text)
+        except ValueError as ex:
+            raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date") from ex
+        return dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc)
     if len(text) < 20 or "T" not in text:
-        raise ValueError("since must be an ISO UTC time")
+        raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date")
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     if len(text) < 6 or text[-6] not in "+-" or text[-3] != ":":
-        raise ValueError("since must be an ISO UTC time")
+        raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date")
     try:
         moment = dt.datetime.fromisoformat(text)
     except ValueError as ex:
-        raise ValueError("since must be an ISO UTC time") from ex
+        raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date") from ex
     if moment.tzinfo is None:
-        raise ValueError("since must be an ISO UTC time")
+        raise ValueError("since must be an ISO UTC time or a YYYY-MM-DD date")
     return moment.astimezone(dt.timezone.utc)
 
 
