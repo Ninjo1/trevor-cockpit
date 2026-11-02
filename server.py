@@ -597,11 +597,34 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                         "choice": fields.get("choice"),
                         "undo": fields.get("undo") == "1",
                     }
+                elif op == "events":
+                    payload = {
+                        "type": fields.get("type"),
+                        "area": fields.get("area") or "",
+                        "label": fields.get("label") or "",
+                        "kind": fields.get("kind") or "",
+                        "place": fields.get("place") or "",
+                    }
                 else:
                     self._send(404, "Not found", "text/plain; charset=utf-8")
                     return
             except KeyError:
                 self._send(400, "The form is missing a field.", "text/plain; charset=utf-8")
+                return
+            if op == "events":
+                try:
+                    with self.state_lock:
+                        moment = dt.datetime.now(dt.timezone.utc)
+                        state = load_state(self.cfg)
+                        events.record_client(state, payload, moment)
+                        save_state(self.cfg, state)
+                except ValueError as ex:
+                    self._send(400, str(ex), "text/plain; charset=utf-8")
+                    return
+                except StateError as ex:
+                    self._send(500, str(ex), "text/plain; charset=utf-8")
+                    return
+                self._send(200, "ok", "text/plain; charset=utf-8")
                 return
             if op == "decision":
                 status, result = self._decision_apply(payload)
