@@ -544,17 +544,46 @@ def _hidden(name, value):
     return f'<input type="hidden" name="{name}" value="{e_raw(value)}">'
 
 
+def readonly_mark():
+    return '<span class="ro">read-only</span>'
+
+
+def _tick_form(action, item_id, done, field="done", email=False, area=None, text=None, form_class="act", box_class=""):
+    """A real checkbox. Without JavaScript, Save posts the form."""
+    if email:
+        verb = "Mark not handled" if done else "Mark handled"
+    else:
+        verb = "Undo done" if done else "Mark done"
+    checked = " checked" if done else ""
+    classes = "ck"
+    if box_class:
+        classes += " " + box_class
+    if email:
+        classes += " em"
+    hidden_area = _hidden("area", area) if area is not None else ""
+    if text is None:
+        control = (
+            f'<label class="{classes}">'
+            f'<input type="checkbox" name="{field}" value="1"{checked} aria-label="{e(verb)}">'
+            f"</label>"
+        )
+    else:
+        control = (
+            f'<label class="{classes}">'
+            f'<input type="checkbox" name="{field}" value="1"{checked}>'
+            f'<span class="qtext">{e(text)}</span></label>'
+        )
+    return (
+        f'<form class="{form_class}" method="post" action="form/{action}">'
+        f'{_hidden("id", item_id)}{hidden_area}{control}'
+        f'<noscript><button class="btn" type="submit">Save</button></noscript></form>'
+    )
+
+
 def item_html(item, today, area_query):
     email = item.get("kind") in ("email", "draft")
     op = "email/handled" if email else "todo/toggle"
     field = "handled" if email else "done"
-    nxt = "0" if item["done"] else "1"
-    if email:
-        verb = "Mark not handled" if item["done"] else "Mark handled"
-        label = "Undo" if item["done"] else "Handled"
-    else:
-        verb = "Undo done" if item["done"] else "Mark done"
-        label = "Undo" if item["done"] else "Done"
     meta = f'<span class="tag t-{e_raw(str(item["area"]).lower().split()[0])}">{e(item["area"])}</span>'
     if not item["done"]:
         meta += due_badge(item.get("due"), today)
@@ -609,10 +638,8 @@ def item_html(item, today, area_query):
     )
     return (
         f'<li class="it{" done" if item["done"] else ""}" id="{e_raw(dom_id("i", item["id"]))}" data-id="{e_raw(item["id"])}" data-area="{e_raw(item["area"])}">'
-        f'<form class="act" method="post" action="form/{op}">{_hidden("id", item["id"])}'
-        f'{_hidden(field, nxt)}{_hidden("area", area_value)}'
-        f'<button class="ck{" em" if email else ""}" type="submit" aria-label="{e(verb)}">{e(label)}</button></form>'
-        f'<div class="bd"><div class="ttl">{e(item["title"])}</div><div class="meta">{meta}</div>'
+        + _tick_form(op, item["id"], item["done"], field=field, email=email, area=area_value)
+        + f'<div class="bd"><div class="ttl">{e(item["title"])}</div><div class="meta">{meta}</div>'
         + (note_html(note) if note else "")
         + links
         + (f'<div class="nt">Owner {e(item.get("owner"))}</div>' if item.get("owner") else "")
@@ -798,7 +825,7 @@ def calendar_html(data, today, zone=None, zone_label=""):
                 bits += f'<div class="lks">{"".join(links)}</div>'
             rows += (
                 f'<li class="ev {classes}"><div class="tm">{when}</div><div class="bd">'
-                f'<div class="et">{tags}{title}</div>{bits}</div></li>'
+                f'<div class="et">{readonly_mark()} {tags}{title}</div>{bits}</div></li>'
             )
         rows += "</ul>"
         blocks.append(f'<article class="day"><h3>{e(label)}</h3>{rows}</article>')
@@ -1113,7 +1140,7 @@ def today_meetings_card(data, zone, zone_label, now):
             title = f'<a href="{e_raw(web)}" target="_blank" rel="noopener noreferrer">{title}</a>'
         body += (
             f'<div class="meet"><div class="tm">{when}{van}</div>'
-            f'<div class="ttl">{title}</div>{join}</div>'
+            f'<div class="ttl">{readonly_mark()} {title}</div>{join}</div>'
         )
     return body
 
@@ -1334,7 +1361,7 @@ def money_html(data, today, area):
                 who = f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{who}</a>'
             body += (
                 f'<li class="money" data-area="{e_raw(area_of(row.get("area")))}">'
-                f'<div class="ttl">{who}</div>'
+                f'<div class="ttl">{readonly_mark()} {who}</div>'
                 f'<div class="meta"><span class="tag">{e(area_of(row.get("area")))}</span>'
                 f'<span class="b">{e(direction)}</span><span class="amt">{e(shown)}</span>'
                 f'{due_badge(row.get("due") or "", today)}</div>'
@@ -1342,7 +1369,10 @@ def money_html(data, today, area):
                 + "</li>"
             )
         body += "</ul>"
-    return f'<section id="money"><h2>Money owed <small>{len(rows)}</small></h2>{body}</section>'
+    return (
+        f'<section id="money"><h2><span>Money owed <small>{len(rows)}</small></span>'
+        f'{readonly_mark()}</h2>{body}</section>'
+    )
 
 
 DEFAULT_MUSK = {
@@ -1381,19 +1411,22 @@ def question_list(title, section, values, checked):
         qid = question_id(section, item)
         entry = checked.get(qid) if isinstance(checked, dict) else None
         done = bool(entry.get("done")) if isinstance(entry, dict) else False
-        nxt = "0" if done else "1"
-        label = "Undo" if done else "Done"
-        pressed = "true" if done else "false"
         rows += (
-            f'<li class="q{" done" if done else ""}">'
-            f'<form class="qform" method="post" action="form/question/toggle">'
-            f'{_hidden("id", qid)}{_hidden("done", nxt)}'
-            f'<button class="ck qck" type="submit" aria-pressed="{pressed}">{e(label)}</button>'
-            f'<span class="qtext">{e(item)}</span></form></li>'
+            f'<li class="q{" done" if done else ""}" id="{e_raw(dom_id("i", qid))}">'
+            + _tick_form(
+                "question/toggle",
+                qid,
+                done,
+                text=item,
+                form_class="qform",
+                box_class="qck",
+            )
+            + "</li>"
         )
     if not rows:
         return ""
-    return f'<div class="lab">{e(title)}</div><ul class="qs">{rows}</ul>'
+    head = f'<div class="lab">{e(title)}</div>' if title else ""
+    return f'{head}<ul class="qs">{rows}</ul>'
 
 
 def principles_html(data, delete_count=0, checked=None):
@@ -1420,19 +1453,19 @@ def principles_html(data, delete_count=0, checked=None):
         if musk.get("bottleneck"):
             html_out += f'<p class="one"><b>The one bottleneck.</b> {e(musk["bottleneck"])}</p>'
         steps = musk.get("steps") if isinstance(musk.get("steps"), list) else []
-        html_out += "<ol>"
+        step_text = []
         for step in steps:
             if isinstance(step, (list, tuple)) and len(step) >= 2:
-                html_out += f"<li><b>{e(step[0])}.</b> {e(step[1])}</li>"
-            else:
-                html_out += f"<li>{e(step)}</li>"
-        html_out += "</ol></article>"
+                step_text.append(f"{step[0]}. {step[1]}")
+            elif isinstance(step, str) and step.strip():
+                step_text.append(step)
+        html_out += question_list("", "musk", step_text, checked) + "</article>"
     if robbins:
         html_out += f'<article class="card"><div class="lab">{e(robbins.get("title") or "Robbins")}</div>'
         html_out += f'<p><b>Result.</b> {e(robbins.get("rpm_result") or "")}</p>'
         html_out += f'<p><b>Purpose.</b> {e(robbins.get("rpm_purpose") or "")}</p>'
         if robbins.get("rpm_plan"):
-            html_out += "<p><b>Massive action plan</b></p>" + bullets(robbins.get("rpm_plan"), ordered=True)
+            html_out += question_list("Massive action plan", "plan", robbins.get("rpm_plan"), checked)
         html_out += "</article><article class=\"card\">"
         if robbins.get("standards"):
             html_out += '<div class="lab">Raised standards</div>' + bullets(robbins.get("standards"))
@@ -1838,10 +1871,9 @@ def waiting_html(data, state, today, area):
             title = f'<a href="{e_raw(href)}" target="_blank" rel="noopener noreferrer">{title}</a>'
         day_text = f"{days}d waiting" if days is not None else "date missing"
         body += (
-            f'<li class="it wait{hot}" data-id="{e_raw(row["id"])}">'
-            f'<form class="act" method="post" action="form/todo/toggle">{_hidden("id", row["id"])}'
-            f'{_hidden("done", "1")}<button class="ck" type="submit">Done</button></form>'
-            f'<div class="bd"><div class="ttl">{title}</div>'
+            f'<li class="it wait{hot}" id="{e_raw(dom_id("i", row["id"]))}" data-id="{e_raw(row["id"])}">'
+            + _tick_form("todo/toggle", row["id"], False)
+            + f'<div class="bd"><div class="ttl">{title}</div>'
             f'<div class="meta"><span class="tag">{e(row.get("channel") or "email")}</span>'
             f'<span>{e(who)}</span><span class="b{" over" if hot else ""}">{e(day_text)}</span>'
             f'<span>since {e(since)}</span></div>'
@@ -1890,7 +1922,10 @@ def render_main(data, state, area="All", today=None, zone=None, zone_label=None,
         f'<div class="quad-rest">{blocks["schedule"]}{blocks["delegate"]}{blocks["delete"]}</div>'
     )
     meetings = today_meetings_card(data, zone, zone_label, clock)
-    html_out += f'<section id="calendar"><h2>Today\'s calendar <small>{e(zone_label)}</small></h2>'
+    html_out += (
+        f'<section id="calendar"><h2><span>Today\'s calendar <small>{e(zone_label)}</small></span>'
+        f'{readonly_mark()}</h2>'
+    )
     html_out += meetings if meetings else '<p class="empty">Nothing on today.</p>'
     html_out += f'<h2>Today and the next 7 days <small>{e(zone_label)}</small></h2>'
     html_out += calendar_html(data, today, zone, zone_label) + "</section>"

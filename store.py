@@ -119,6 +119,7 @@ def fresh_state():
         "decisions": [],
         "events": [],
         "watches": {},
+        "done_sync": {},
         "log": [],
     }
 
@@ -162,6 +163,8 @@ def load_state(cfg):
         loaded["events"] = []
     if not isinstance(loaded.get("watches"), dict):
         loaded["watches"] = {}
+    if not isinstance(loaded.get("done_sync"), dict):
+        loaded["done_sync"] = {}
     return loaded
 
 
@@ -203,6 +206,8 @@ def save_state(cfg, state, now=None):
     state.setdefault("events", [])
     if not isinstance(state.get("watches"), dict):
         state["watches"] = {}
+    if not isinstance(state.get("done_sync"), dict):
+        state["done_sync"] = {}
     eventlog.prune(state, now.astimezone(dt.timezone.utc))
     os.makedirs(cfg.data_dir, exist_ok=True)
     atomic_write_json(state_path(cfg), state)

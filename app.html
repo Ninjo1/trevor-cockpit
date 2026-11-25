@@ -207,11 +207,21 @@ li.it, li.money {
 li.money { grid-template-columns: minmax(0, 1fr); }
 li.it form.act { margin: 0; }
 .ck {
-  min-width: 84px; min-height: 48px; border-radius: 10px; border: 2px solid var(--t);
-  background: transparent; color: var(--t); font-weight: 750; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 48px; min-height: 48px; margin: 0; padding: 0; border: 0;
+  background: transparent; color: var(--t); cursor: pointer;
 }
-.ck.em { border-style: dashed; }
-.done .ck { background: var(--t); color: var(--bg); }
+.ck input {
+  width: 28px; height: 28px; margin: 0; accent-color: var(--c); cursor: pointer;
+}
+.ck input:focus-visible { outline: 2px solid var(--c); outline-offset: 3px; }
+.ck.em input { outline: 1px dashed var(--t); outline-offset: 3px; }
+.ro {
+  display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 750;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--m);
+  border: 1px solid var(--l); border-radius: 4px; padding: 2px 6px; vertical-align: middle;
+}
+h2 .ro { margin-left: 0; }
 .bd { min-width: 0; }
 .ttl { font-weight: 680; font-size: 18px; overflow-wrap: anywhere; }
 .done .ttl { text-decoration: line-through; color: var(--m); }
@@ -259,7 +269,7 @@ html.light .b.soon { background: #ffe7ad; color: #3d2c00; }
 .qs { list-style: none; margin: 0 0 8px; padding: 0; }
 .qs li { border-bottom: 1px solid var(--l); }
 .qform { display: flex; gap: 8px; align-items: center; min-height: 44px; margin: 0; }
-.qck { min-width: 72px; min-height: 36px; }
+.qck { min-width: 44px; min-height: 44px; justify-content: flex-start; }
 .qtext { font-size: 15px; }
 .q.done .qtext { color: var(--m); text-decoration: line-through; }
 .draftwait { color: var(--a); font-weight: 750; }
@@ -449,7 +459,7 @@ footer { margin-top: 28px; font-size: 14px; }
     const keep = [...app.querySelectorAll("details.keep")].map((node) => node.open);
     const res = await fetch("api/fragment?area=" + encodeURIComponent(area === "All" ? "" : area), {
       cache: "no-store",
-      credentials: "same-origin"
+      credentials: "include"
     });
     if (!res.ok) throw new Error("refresh");
     const body = await res.json();
@@ -508,12 +518,38 @@ footer { margin-top: 28px; font-size: 14px; }
   async function post(op, body) {
     const res = await fetch("api/" + op, {
       method: "POST",
-      credentials: "same-origin",
+      credentials: "include",
+      cache: "no-store",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify(body)
     });
     if (!res.ok) throw new Error("save");
     return res.json();
+  }
+
+  // A home-screen Safari fetch can drop Basic auth. A same-origin form
+  // navigation still sends it. The frame keeps that from reloading the board.
+  function submitViaFrame(form) {
+    let frame = document.getElementById("tick-frame");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.id = "tick-frame";
+      frame.name = "tick-frame";
+      frame.hidden = true;
+      frame.setAttribute("aria-hidden", "true");
+      document.body.appendChild(frame);
+    }
+    const previous = form.getAttribute("target");
+    form.setAttribute("target", "tick-frame");
+    form.submit();
+    if (previous === null) form.removeAttribute("target");
+    else form.setAttribute("target", previous);
+  }
+
+  function tickBody(op, form, on) {
+    const data = new FormData(form);
+    if (op === "email/handled") return { id: data.get("id"), handled: on };
+    return { id: data.get("id"), done: on };
   }
 
   function paintChips() {
@@ -596,11 +632,52 @@ footer { margin-top: 28px; font-size: 14px; }
       await refresh();
     } catch (err) {
       row.classList.remove("busy");
-      if (op === "todo/toggle" || op === "email/handled" || op === "todo/quadrant" || op === "question/toggle" || op === "decision" || op === "snooze") {
-        form.submit();
+      if (op === "todo/toggle" || op === "email/handled" || op === "question/toggle") {
+        submitViaFrame(form);
+        setSave("ok", "Saved");
+        return;
+      }
+      if (op === "todo/quadrant" || op === "decision" || op === "snooze") {
+        submitViaFrame(form);
         return;
       }
       setSave("warn", "Not saved. Tap again.");
+    }
+  });
+
+  app.addEventListener("change", async (ev) => {
+    const box = ev.target;
+    if (!(box instanceof HTMLInputElement) || box.type !== "checkbox" || !box.form || !app.contains(box)) return;
+    const form = box.form;
+    const op = (form.getAttribute("action") || "").replace(/^form\//, "");
+    if (op !== "todo/toggle" && op !== "email/handled" && op !== "question/toggle") return;
+    const row = form.closest("li") || form;
+    const on = box.checked;
+    row.classList.toggle("done", on);
+    row.classList.add("busy");
+    const body = tickBody(op, form, on);
+    try {
+      await post(op, body);
+      if (op === "todo/toggle" || op === "email/handled") {
+        const inverse = Object.assign({}, body);
+        if (op === "todo/toggle") inverse.done = on !== true;
+        if (op === "email/handled") inverse.handled = on !== true;
+        lastUndo = { op: op, body: inverse };
+        undo.hidden = false;
+      }
+      setSave("ok", "Saved");
+      row.classList.remove("busy");
+      try { await refresh(); } catch (err) {}
+    } catch (err) {
+      row.classList.remove("busy");
+      try {
+        submitViaFrame(form);
+        setSave("ok", "Saved");
+      } catch (err2) {
+        box.checked = !on;
+        row.classList.toggle("done", !on);
+        setSave("warn", "Not saved. Tap again.");
+      }
     }
   });
 
