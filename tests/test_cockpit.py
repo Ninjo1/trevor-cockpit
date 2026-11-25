@@ -41,6 +41,13 @@ def visible(page):
     return text
 
 
+def question_box(html, question):
+    """The markup of the checklist row that contains this question text."""
+    before, _sep, _after = html.partition(question)
+    start = before.rfind("<li")
+    return before[start:]
+
+
 def basic(user, password):
     token = base64.b64encode(f"{user}:{password}".encode()).decode()
     return "Basic " + token
@@ -1141,30 +1148,30 @@ class RobbinsTests(HttpCase):
         shown, _counts, _jarvis = render.render_main(
             self._board(), state, env={"HOME_TZ": "Asia/Bangkok"}, now=moment,
         )
-        self.assertIn('aria-pressed="true"', shown.split(self.MORNING[0], 1)[0][-180:])
+        self.assertIn(" checked", question_box(shown, self.MORNING[0]))
         away, _counts, _jarvis = render.render_main(
             self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=moment,
         )
-        happy = away.split(self.MORNING[0], 1)[0][-180:]
-        self.assertIn('aria-pressed="false"', happy)
+        happy = question_box(away, self.MORNING[0])
+        self.assertNotIn(" checked", happy)
         later = dt.datetime(2026, 11, 1, 8, 30, tzinfo=dt.timezone.utc)
         vancouver_next, _zone = render.ritual_day({"HOME_TZ": "America/Vancouver"}, {}, later)
         self.assertEqual(vancouver_next, "2026-11-01")
         rolled, _counts, _jarvis = render.render_main(
             self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=later,
         )
-        self.assertIn('aria-pressed="true"', rolled.split(self.MORNING[0], 1)[0][-180:])
+        self.assertIn(" checked", question_box(rolled, self.MORNING[0]))
         apply(state, "question/toggle", {"id": qid, "done": True, "day": "2026-10-31"}, "2026-11-01T06:00:00Z")
         before_midnight = dt.datetime(2026, 11, 1, 7, 30, tzinfo=dt.timezone.utc)
         on_old_day, _counts, _jarvis = render.render_main(
             self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=before_midnight,
         )
-        self.assertIn('aria-pressed="true"', on_old_day.split(self.MORNING[0], 1)[0][-180:])
+        self.assertIn(" checked", question_box(on_old_day, self.MORNING[0]))
         after = dt.datetime(2026, 11, 2, 8, 30, tzinfo=dt.timezone.utc)
         reset, _counts, _jarvis = render.render_main(
             self._board(), state, env={"HOME_TZ": "America/Vancouver"}, now=after,
         )
-        self.assertIn('aria-pressed="false"', reset.split(self.MORNING[0], 1)[0][-180:])
+        self.assertNotIn(" checked", question_box(reset, self.MORNING[0]))
 
     def test_question_toggle_requires_auth_and_persists(self):
         question = "What did I learn today?"
@@ -1191,7 +1198,8 @@ class RobbinsTests(HttpCase):
         self.assertEqual(status, 200)
         text = page.decode()
         self.assertIn(question, text)
-        self.assertIn('aria-pressed="true"', text.split(question, 1)[0][-220:])
+        self.assertIn(" checked", question_box(text, question))
+        self.assertIn('type="checkbox"', question_box(text, question))
         state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
         self.assertTrue(state["questions"][saved["result"]["day"]][qid]["done"])
 
@@ -1862,6 +1870,235 @@ class WatchTests(HttpCase):
         self.assertEqual(status, 400, body)
         status, _headers, page = self.request("/")
         self.assertIn("Nov 9", page.decode())
+
+
+class ChecklistTests(HttpCase):
+    def _between(self, html, start, end):
+        left = html.find(f'id="{start}"')
+        right = html.find(f'id="{end}"', left + 1)
+        self.assertGreaterEqual(left, 0, start)
+        self.assertGreater(right, left, end)
+        return html[left:right]
+
+    def _ingest(self, payload):
+        return self.request(
+            "/api/ingest",
+            method="POST",
+            data=json.dumps(payload).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+
+    def _toggle(self, item_id, done):
+        return self.request(
+            "/api/todo/toggle",
+            method="POST",
+            data=json.dumps({"id": item_id, "done": done}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    def test_checkboxes_render_for_each_section(self):
+        today = dt.date(2026, 10, 30)
+        html, _counts, _jarvis = render.render_main(
+            self.sample(),
+            fresh_state(),
+            today=today,
+            now=dt.datetime(2026, 10, 30, 18, tzinfo=dt.timezone.utc),
+        )
+        do_now = self._between(html, "quadrant-do_now", "waiting-on")
+        waiting = self._between(html, "waiting-on", "quadrant-schedule")
+        rest = self._between(html, "quadrant-schedule", "calendar")
+        calendar = self._between(html, "calendar", "restaurants")
+        emails = self._between(html, "emails", "money")
+        money = self._between(html, "money", "principles")
+        principles = html[html.find('id="principles"') :]
+        self.assertIn('type="checkbox"', do_now)
+        self.assertIn('name="done"', do_now)
+        self.assertIn('type="checkbox"', rest)
+        self.assertIn('type="checkbox"', waiting)
+        self.assertRegex(waiting, r'<li class="it wait[^"]*" id="i-')
+        self.assertIn('name="handled"', emails)
+        self.assertIn('type="checkbox"', emails)
+        self.assertIn('type="checkbox"', question_box(principles, "Question the requirement"))
+        self.assertIn('type="checkbox"', question_box(principles, "Read the sample task."))
+        self.assertIn('type="checkbox"', question_box(principles, "What am I committed to today?"))
+        self.assertIn("read-only", money)
+        self.assertNotIn('type="checkbox"', money)
+        self.assertIn("read-only", calendar)
+        self.assertNotIn('type="checkbox"', calendar)
+        self.assertIn("read-only", question_box(calendar, "Sample harbor check-in"))
+        status, _headers, page = self.request("/")
+        self.assertEqual(status, 200)
+        served = page.decode()
+        self.assertIn('type="checkbox"', served)
+        self.assertIn(">read-only<", served)
+        self.assertNotIn('<button class="ck', served)
+
+    def test_ingest_done_ids_marks_items_and_rejects_a_bad_list(self):
+        payload = self.sample()
+        payload["done_ids"] = ["S-now-1", "L-C-030"]
+        status, _headers, body = self._ingest(payload)
+        self.assertEqual(status, 200, body)
+        remote = json.loads(body)
+        self.assertEqual(remote["done_ids"], 2)
+        self.assertEqual(remote["undone_ids"], 0)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+        self.assertTrue(state["todos"]["L-C-030"]["done"])
+        self.assertEqual(state["done_sync"], {})
+        status, _headers, page = self.request("/")
+        row = question_box(page.decode(), "Sample: confirm the harbor demo checklist")
+        self.assertIn('class="it done"', row)
+        self.assertIn(" checked", row)
+        bad = self.sample()
+        bad["notes"] = ["should not land"]
+        bad["done_ids"] = "S-now-1"
+        status, _headers, body = self._ingest(bad)
+        self.assertEqual(status, 400, body)
+        stored = json.load(open(os.path.join(self.tmp.name, "data.json"), encoding="utf-8"))
+        self.assertNotIn("should not land", json.dumps(stored))
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["L-C-030"]["done"])
+
+    def test_board_ticks_survive_reingest_until_explicitly_undone(self):
+        status, _headers, body = self._toggle("S-now-1", True)
+        self.assertEqual(status, 200, body)
+        pushed = self.sample()
+        for item in pushed["items"]:
+            if item["id"] == "S-now-1":
+                item["done"] = False
+                item["title"] = "Sample: renamed by the data push"
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+        status, _headers, page = self.request("/")
+        self.assertIn("Sample: renamed by the data push", page.decode())
+        self.assertIn(" checked", question_box(page.decode(), "Sample: renamed by the data push"))
+
+        pushed["done_ids"] = ["L-C-999"]
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+
+        status, _headers, body = self._toggle("S-now-1", False)
+        self.assertEqual(status, 200, body)
+        pushed["done_ids"] = ["S-now-1"]
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertFalse(state["todos"]["S-now-1"]["done"])
+        self.assertFalse(state["done_sync"]["S-now-1"]["done"])
+        status, _headers, page = self.request("/")
+        row = question_box(page.decode(), "Sample: renamed by the data push")
+        self.assertNotIn(" checked", row)
+        self.assertNotIn('class="it done"', row)
+
+        status, _headers, body = self._toggle("S-now-1", True)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        observed = state["done_sync"]["S-now-1"]["at"]
+        pushed.pop("done_ids", None)
+        pushed["done_ack"] = [{"id": "S-now-1", "at": observed}]
+        pushed["undone_ids"] = ["S-now-1"]
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+        self.assertNotIn("S-now-1", state["done_sync"])
+
+        pushed.pop("done_ack")
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertFalse(state["todos"]["S-now-1"]["done"])
+
+        pushed.pop("undone_ids")
+        pushed["done_ids"] = ["S-now-1"]
+        status, _headers, body = self._ingest(pushed)
+        self.assertEqual(status, 200, body)
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+
+    def test_done_sync_round_trip(self):
+        status, _headers, _body = self.request("/api/done-sync", auth=False)
+        self.assertEqual(status, 401)
+        status, _headers, body = self.request(
+            "/api/done-sync",
+            method="POST",
+            data=b"{}",
+            auth=False,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 401)
+        status, _headers, body = self.request("/api/done-sync", auth="Bearer " + self.token)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["pending"], [])
+
+        status, _headers, body = self._toggle("S-now-1", True)
+        self.assertEqual(status, 200, body)
+        status, _headers, body = self.request(
+            "/api/email/handled",
+            method="POST",
+            data=json.dumps({"id": "S-mail-1", "handled": True}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+        qid = render.question_id("evening", "What did I learn today?")
+        status, _headers, body = self.request(
+            "/api/question/toggle",
+            method="POST",
+            data=json.dumps({"id": qid, "done": True}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+
+        status, _headers, body = self.request("/api/done-sync", auth="Bearer " + self.token)
+        self.assertEqual(status, 200, body)
+        pending = json.loads(body)["pending"]
+        self.assertEqual([row["id"] for row in pending], ["S-now-1"])
+        self.assertTrue(pending[0]["done"])
+        self.assertTrue(pending[0]["at"])
+        status, _headers, body = self.request("/api/done-sync")
+        self.assertEqual(json.loads(body)["pending"][0]["id"], "S-now-1")
+
+        status, _headers, body = self.request(
+            "/api/done-sync",
+            method="POST",
+            data=json.dumps({"acks": [{"id": "S-now-1", "at": "1999-01-01T00:00:00Z"}]}).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+        remote = json.loads(body)
+        self.assertEqual(remote["acked"], [])
+        self.assertEqual(remote["pending"][0]["id"], "S-now-1")
+
+        status, _headers, body = self.request(
+            "/api/done-sync",
+            method="POST",
+            data=json.dumps({"ids": ["S-now-1"]}).encode(),
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, body)
+        remote = json.loads(body)
+        self.assertEqual(remote["acked"], ["S-now-1"])
+        self.assertEqual(remote["pending"], [])
+        state = json.load(open(os.path.join(self.tmp.name, "state.json"), encoding="utf-8"))
+        self.assertTrue(state["todos"]["S-now-1"]["done"])
+        self.assertNotIn(qid, state["done_sync"])
+        self.assertNotIn("S-mail-1", state["done_sync"])
+
+        status, _headers, body = self.request(
+            "/api/done-sync",
+            method="POST",
+            data=b"{}",
+            auth="Bearer " + self.token,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400, body)
 
 
 if __name__ == "__main__":

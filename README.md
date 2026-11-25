@@ -2,7 +2,7 @@
 
 Private board for Trevor Small. Open one URL on a phone, tablet, or laptop. Ticks, custom tasks, edits, snoozes, and handled mail are stored on the server and stay put across devices and reloads.
 
-The page is a small Python 3 program from the standard library. Render serves it over HTTPS. A morning job on the Mac builds `data.json` and pushes it. That push never clears a tick.
+The page is a small Python 3 program from the standard library. Render serves it over HTTPS. A morning job on the Mac builds `data.json` and pushes it. That push never clears a tick unless the payload lists the id in `undone_ids`.
 
 `sample/data.json` is fake data for local development and tests. Do not commit a real `data.json`, `state.json`, ledger, or secret.
 
@@ -34,7 +34,7 @@ To put the board on the iPhone home screen, open it in Safari, then Share, then 
 | `BASIC_AUTH_USER` | Blueprint, value `trevor` | Sign-in name |
 | `BASIC_AUTH_PASS_SHA256` | Render dashboard, secret | Lowercase hex SHA-256 of the sign-in password. Preferred. When set, Basic auth checks this hash |
 | `BASIC_AUTH_PASS` | Render dashboard, secret | Plaintext sign-in password. Optional when the hash is set. Ignored if the hash is also set |
-| `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest` and an alternate login for `GET /api/state` |
+| `INGEST_TOKEN` | Render dashboard, secret | Bearer token for `POST /api/ingest`, `GET` and `POST /api/done-sync`, and an alternate login for `GET /api/state` |
 | `VOICE_PICKUP_TOKEN` | Render dashboard, secret | Bearer token for the voice draft pickup routes and `GET /api/events`. Leave it unset until you choose a value. If it is unset those routes return 503 |
 | `DATA_DIR` | Blueprint, value `/var/data` | Disk directory for `state.json`, `data.json`, and backups |
 | `HOME_TZ` | Render dashboard | Current location, the Here clock, not Vancouver. Vancouver is always the Home clock. These names stay as they are. Robbins questions reset at midnight in this zone, or in today's payload location zone when that place includes a time zone. If neither is set, that reset uses Asia/Bangkok. Example: `Asia/Bangkok` |
@@ -69,17 +69,65 @@ curl --fail-with-body -sS -X POST "https://YOUR-SERVICE.onrender.com/api/ingest"
 
 Or `./scripts/push_data.sh data.json` with `BASE_URL` and `INGEST_TOKEN` set.
 
-A good push responds with `{"ok": true, "items": N, "calendar": N, "restaurants": N}`. The previous file is kept at `$DATA_DIR/data.json.prev`. `state.json` is not modified.
+A good push responds with `{"ok": true, "items": N, "calendar": N, "restaurants": N, "done_ids": N, "undone_ids": N, "done_ack": N}`. The previous file is kept at `$DATA_DIR/data.json.prev`. `state.json` is left alone unless the payload includes `done_ids`, `undone_ids`, or `done_ack`.
 
 A bad body responds with 400 and an `error` string. The current `data.json` stays as it was. Basic auth is not accepted on this route. There is only one `Authorization` header, and this route requires the bearer token.
 
-Read ticks back for the ledger or Notion sync:
+Read ticks back for the ledger:
 
 ```sh
 curl -sS -H "Authorization: Bearer $INGEST_TOKEN" "https://YOUR-SERVICE.onrender.com/api/state"
 ```
 
 The same call accepts `-u trevor:$BASIC_AUTH_PASS`. The body is `todos`, `custom`, `emails`, `updated_at`, and `server_time`. `todos` holds done flags and per-item edits. `emails` holds handled flags. `custom` holds tasks added in the browser.
+
+## Done sync
+
+The board does not call Notion. There is no Notion token on this service. The morning job on the Mac does the Notion read and write, then tells the board. The Actions database is `e818c3a4e6314e02be0e61ef0c232a52`. Match rows on the **Item ID** property (the board item id, such as `L-C-030`) and the **Done** checkbox.
+
+`POST /api/ingest` accepts three optional keys beside the usual board payload. Auth is still `Authorization: Bearer $INGEST_TOKEN`.
+
+| Key | Shape | Effect |
+| --- | --- | --- |
+| `done_ids` | list of item ids | Mark those ids done in `state.json` |
+| `undone_ids` | list of item ids | Mark those ids not done. This is the only way a refresh reopens a tick |
+| `done_ack` | list of ids, or `{id, at}` | Drop those ids from the pending sync list |
+
+Leaving an id out of both lists does not change it. An id in both lists is treated as undone. A board tick or untick that is still pending is not overwritten. An id acked in the same payload is also left as the board set it; the next ingest can change it.
+
+```json
+{
+  "done_ids": ["L-C-030", "L-C-043"],
+  "undone_ids": ["L-C-056"],
+  "done_ack": [{"id": "L-C-058", "at": "2026-11-25T01:23:45Z"}]
+}
+```
+
+`GET /api/done-sync` (Bearer token or Basic auth) returns board toggles not yet confirmed:
+
+```json
+{"ok": true, "pending": [{"id": "L-C-030", "done": true, "at": "2026-11-25T01:23:45Z"}], "server_time": "2026-11-25T01:24:00Z"}
+```
+
+`done` is the board's current value. `at` is when that toggle was saved. Robbins questions and handled mail are not in this list.
+
+`POST /api/done-sync` with the same auth acks them. Send the `at` you read so a newer toggle is kept.
+
+```json
+{"acks": [{"id": "L-C-030", "at": "2026-11-25T01:23:45Z"}]}
+```
+
+`{"ids": ["L-C-030"]}` acks whatever is pending for those ids. The response is `{"ok": true, "acked": ["L-C-030"], "pending": []}`.
+
+Morning job order:
+
+1. `GET /api/done-sync`.
+2. For each pending row, set that Item ID's Done box in Notion.
+3. `POST /api/done-sync` with `acks` of `{id, at}` for the rows you wrote.
+4. Read Notion. `done_ids` is every Item ID whose Done box is checked. `undone_ids` is every Item ID whose Done box is unchecked.
+5. `POST /api/ingest` with the board payload plus those two lists.
+
+Do not send an id in both lists. After step 3, a ticked row should be in `done_ids` only.
 
 ## What is stored
 
@@ -115,7 +163,7 @@ Each item needs `id` and `title`. `id` matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,80}
 | `section` | `now`, `open`, `waiting`, `watch`, `owed`, `money` |
 | `due` | `YYYY-MM-DD` or `""` |
 | `priority` | `low` or null |
-| `done` | bool. A tick in `state.json` wins over this |
+| `done` | bool. A tick in `state.json` wins over this. To record Notion's checkbox, send `done_ids` / `undone_ids` (see Done sync). A later push does not reopen a ticked item just because this field is false |
 | `note`, `done_note` | strings. The note is one line until tapped, then it expands. This is a tap, not a hover |
 | `webLink` | Outlook message URL. Any email-sourced item (kind `email` or `draft`, or a `webLink` / Outlook link on another kind) renders Open email |
 | `ledger_ids`, `refs` | lists of strings |
@@ -243,7 +291,9 @@ A minimal restaurants object, if the morning file does not have one yet:
 | GET | `/api/fragment?area=` | Basic | HTML fragment used by the page script |
 | GET | `/api/data` | Basic | Current data plus state |
 | GET | `/api/state` | Bearer or Basic | Ticks for the morning sync |
-| POST | `/api/ingest` | Bearer | Replace `data.json` |
+| POST | `/api/ingest` | Bearer | Replace `data.json`. Optional `done_ids`, `undone_ids`, and `done_ack` merge into `state.json` |
+| GET | `/api/done-sync` | Bearer or Basic | Pending board ticks not yet acked to Notion |
+| POST | `/api/done-sync` | Bearer or Basic | Ack pending ticks by `ids` or `acks` |
 | POST | `/api/todo/toggle` | Basic | `{id, done}` |
 | POST | `/api/todo/add` | Basic | `{title, area, due, notes}` |
 | POST | `/api/todo/edit` | Basic | `{id, title, area, due, notes}` |

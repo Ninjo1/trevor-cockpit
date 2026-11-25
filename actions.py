@@ -71,6 +71,9 @@ def apply(state, op, body, now_iso):
         done = bool(body["done"])
         entry["done"] = done
         entry["done_at"] = now_iso if done else None
+        from done_sync import queue as queue_done
+
+        queue_done(state, item_id, done, now_iso)
         return {"id": item_id, "done": done}
     if op == "todo/add":
         title = _text(body.get("title"), "title", 300)

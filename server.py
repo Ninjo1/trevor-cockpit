@@ -5,9 +5,11 @@ Auth: HTTP Basic on every path except /healthz. Fails closed when neither
 BASIC_AUTH_PASS nor BASIC_AUTH_PASS_SHA256 is set. When the hash is set,
 it is the password check (SHA-256 hex of the UTF-8 password) and
 BASIC_AUTH_PASS is optional. POST /api/ingest uses Authorization: Bearer
-$INGEST_TOKEN. GET /api/state accepts that bearer or the same Basic check.
+$INGEST_TOKEN. GET /api/state and /api/done-sync accept that bearer or the
+same Basic check.
 
-Ticks live in $DATA_DIR/state.json and are never written by ingest.
+Ticks live in $DATA_DIR/state.json. Ingest leaves them in place unless the
+payload includes done_ids, undone_ids, or done_ack.
 """
 import datetime as dt
 import json
@@ -18,6 +20,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import decisions
+import done_sync
 import events
 import fxrates
 import render
@@ -262,18 +265,29 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             try:
                 validate_data(obj)
+                done_sync.validate_payload(obj)
             except ValueError as ex:
                 self._json(400, {"ok": False, "error": str(ex)})
                 return
+            sync_counts = {"done_ids": 0, "undone_ids": 0, "done_ack": 0}
             try:
                 with self.state_lock:
                     save_data(self.cfg, obj)
-                    if isinstance(obj.get("watches"), list):
+                    needs_watches = isinstance(obj.get("watches"), list)
+                    needs_sync = done_sync.touches(obj)
+                    if needs_watches or needs_sync:
                         state = load_state(self.cfg)
-                        watches.apply_payload(state, obj["watches"])
-                        save_state(self.cfg, state)
+                        if needs_watches:
+                            watches.apply_payload(state, obj["watches"])
+                        if needs_sync:
+                            sync_counts = done_sync.apply_ingest(state, obj, now_iso())
+                        if needs_watches or sync_counts.get("changed"):
+                            save_state(self.cfg, state)
             except OSError:
                 self._json(500, {"ok": False, "error": "could not store data"})
+                return
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
                 return
             restaurants = obj.get("restaurants") or {}
             self._json(
@@ -283,8 +297,64 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                     "items": len(obj.get("items") or []),
                     "calendar": len(obj.get("calendar") or []),
                     "restaurants": len(restaurants.get("eat") or []) + len(restaurants.get("delivery") or []),
+                    "done_ids": sync_counts.get("done_ids", 0),
+                    "undone_ids": sync_counts.get("undone_ids", 0),
+                    "done_ack": sync_counts.get("done_ack", 0),
                 },
             )
+
+        def _sync_auth(self):
+            header = self.headers.get("Authorization")
+            allowed = bearer_ok(header, self.cfg.ingest_token) or self._basic_ok()
+            if not allowed:
+                self._unauthorized("Bearer" if (header or "").lower().startswith("bearer ") else "Basic")
+                return False
+            return True
+
+        def _done_sync_list(self):
+            if not self._sync_auth():
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            self._json(200, {"ok": True, "pending": done_sync.list_pending(state), "server_time": now_iso()})
+
+        def _done_sync_ack(self):
+            if not self._sync_auth():
+                return
+            body, error = self._read(JSON_LIMIT)
+            if error == "too large":
+                self._json(413, {"ok": False, "error": "body is too large"})
+                return
+            if error:
+                self._json(400, {"ok": False, "error": "body length is not valid"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8") or "null")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._json(400, {"ok": False, "error": "body is not JSON"})
+                return
+            try:
+                entries = done_sync.acks_from_body(payload)
+            except ValueError as ex:
+                self._json(400, {"ok": False, "error": str(ex)})
+                return
+            try:
+                with self.state_lock:
+                    state = load_state(self.cfg)
+                    acked = done_sync.ack(state, entries)
+                    save_state(self.cfg, state)
+                    pending = done_sync.list_pending(state)
+            except StateError as ex:
+                self._json(500, {"ok": False, "error": str(ex)})
+                return
+            except OSError:
+                self._json(500, {"ok": False, "error": "could not store ticks"})
+                return
+            self._json(200, {"ok": True, "acked": acked, "pending": pending})
 
         def _mutate(self, op, body):
             try:
@@ -710,6 +780,12 @@ main{max-width:36rem;margin:10vh auto;padding:24px}a{color:#5fe0ff}</style></hea
                 return
             if not write and path == "/api/state":
                 self._state()
+                return
+            if path == "/api/done-sync":
+                if write:
+                    self._done_sync_ack()
+                else:
+                    self._done_sync_list()
                 return
             if not write and path == "/api/voice/draft_requests":
                 self._voice_list()
